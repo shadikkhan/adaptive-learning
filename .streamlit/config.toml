@@ -1,0 +1,14 @@
+[server]
+# Avoid noisy module-path watcher warnings from transformers optional vision deps (torchvision).
+fileWatcherType = "none"
+
+[runner]
+# Keep behavior predictable for this app's session-state driven UI.
+fastReruns = true
+
+[theme]
+base = "light"
+primaryColor = "#0f766e"
+backgroundColor = "#f8fbfb"
+secondaryBackgroundColor = "#edf3f3"
+textColor = "#2a3b49"
