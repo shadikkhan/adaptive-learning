@@ -1,1340 +1,1416 @@
-"""
-AgeXplain – Streamlit UI
-Mirrors the React frontend, calling the Python backend directly (no HTTP API).
-"""
+"""AgeXplain – Streamlit UI"""
 
-import sys
-import os
-
-# ── Make sure the streamlit/ directory itself is on sys.path so that all
-#    backend packages (graph, agents, configs, …) can be imported directly.
+import sys, os
 _HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-
-import asyncio
-import hashlib
-import uuid
-import re
-
+if _HERE not in sys.path: sys.path.insert(0, _HERE)
+import hashlib, uuid, re, json, asyncio, threading, io
+from urllib.parse import quote
 import streamlit as st
 from dotenv import load_dotenv
-
-# Load .env from the streamlit directory (same as backend/.env – copy it there)
+try:
+    from streamlit_pills import pills
+except Exception:
+    pills = None
 load_dotenv(os.path.join(_HERE, ".env"))
 
-# ── Backend imports (all unmodified) ──────────────────────────────────────────
-from db.database import init_db, save_document, get_document, get_document_by_content_hash
-from services.rag_service import get_rag_service
-from services.document_service import extract_document_text, summarize_with_fallback
-from services.model_provider import RuntimeModelConfig, build_runtime_llm
-from configs.config import DIFFICULTY_MAP, use_request_llm, LLM_MODEL, LLM_TEMPERATURE
-from graph import learning_graph
-from api.routes import TOPICS_DATA, _parse_quiz_response, _sanitize_quiz_question
-
-# ── One-time DB / RAG initialisation ─────────────────────────────────────────
-@st.cache_resource
-def _init_backend():
-    init_db()
-    from services.rag_service import reload_indices_from_db
-    reload_indices_from_db()
-    from services.tts_service import cleanup_audio_files
-    cleanup_audio_files(force=True)
-
-_init_backend()
-
-# ── Constants ─────────────────────────────────────────────────────────────────
+TOPICS_DATA = {
+    "Science":    ["photosynthesis","solar system","water cycle","gravity","electricity"],
+    "Math":       ["fractions","multiplication","geometry","percentages","algebra basics"],
+    "History":    ["ancient egypt","world war ii","renaissance","industrial revolution","american revolution"],
+    "Technology": ["how the internet works","artificial intelligence","computers","smartphones","coding basics"],
+}
 PROFESSION_OPTIONS = [
-    "Business (Sales, Marketing, Finance)",
-    "Creative and Media",
-    "Data and Research",
-    "Education (Teacher, Trainer)",
-    "Government and Public Service",
-    "Healthcare (Doctor, Nurse)",
-    "Management (Team Lead, Manager)",
-    "Operations and Skilled Trades",
-    "Other",
-    "Student",
+    "Business (Sales, Marketing, Finance)","Creative and Media","Data and Research",
+    "Education (Teacher, Trainer)","Government and Public Service","Healthcare (Doctor, Nurse)",
+    "Management (Team Lead, Manager)","Operations and Skilled Trades","Other","Student",
     "Technology (Software Engineer, IT)",
 ]
-
-AREA_OF_INTEREST_OPTIONS = sorted([
-    "General", "Everyday Life", "School & Exams", "Career & Workplace",
-    "Business", "Technology", "Engineering", "Finance", "Healthcare",
-    "Law & Policy", "Environment", "Society & Community", "Sports",
-    "Soccer", "Cricket", "Basketball", "Music & Arts",
-    "Movies & Storytelling", "Gaming", "Research",
+AREA_OPTIONS = sorted([
+    "General","Everyday Life","School & Exams","Career & Workplace","Business","Technology",
+    "Engineering","Finance","Healthcare","Law & Policy","Environment","Society & Community",
+    "Sports","Soccer","Cricket","Basketball","Music & Arts","Movies & Storytelling","Gaming","Research",
 ])
+ENABLE_LOCAL = os.getenv("ENABLE_LOCAL_PROVIDER","true").strip().lower() in {"1","true","yes","on"}
+PROVIDERS = ["claude","copilot","gemini","openai"]
+if ENABLE_LOCAL: PROVIDERS.insert(3,"local")
+PLABELS = {"claude":"Claude","copilot":"Copilot","gemini":"Gemini","local":"Local (Ollama)","openai":"OpenAI"}
 
-PROVIDER_OPTIONS = ["local", "claude", "copilot", "gemini", "openai"]
+def _init():
+    D = dict(chats=[],active_chat_id=None,last_question="",age=10,
+             profession="Student",expertise_level="Beginner",area_of_interest="General",
+             include_examples=False,include_questions=False,model_provider="claude",
+             _model_provider_selected="claude",
+             model_api_key="",model_validation_result=None,selected_pack="",
+             _api_keys_by_provider={},
+             quiz_difficulty="medium",_ic=0,_upload_done=set(),
+             _last_selected_pack="",_last_pack_topic="",_pending_pack_topic="",
+             _pending_prompt_text="",_db_ready=False,
+             _last_mic_hash="",_last_mic_text="",_last_mic_prompt_text="",
+             _is_generating=False,_pending_send_text="",_pending_send_force_fresh=False,
+             _pending_include_examples=False,_pending_include_questions=False)
+    for k,v in D.items():
+        if k not in st.session_state: st.session_state[k]=v
+_init()
 
-KNOWN_TOPICS = {
-    "photosynthesis", "solar system", "water cycle", "gravity", "electricity",
-    "fractions", "multiplication", "geometry", "percentages", "algebra basics",
-    "ancient egypt", "world war ii", "renaissance", "industrial revolution",
-    "american revolution", "how the internet works", "artificial intelligence",
-    "computers", "smartphones", "coding basics",
-}
+def _chat():
+    cid=st.session_state.active_chat_id
+    return next((c for c in st.session_state.chats if c["id"]==cid),None)
 
-# ── Session state initialisation ─────────────────────────────────────────────
-def _init_state():
-    defaults = {
-        "chats": [],
-        "active_chat_id": None,
-        "last_question": "",
-        # settings – these are read by widgets via key=, only set once here
-        "age": 10,
-        "profession": "Student",
-        "expertise_level": "Beginner",
-        "area_of_interest": "General",
-        "include_examples": False,
-        "include_questions": False,
-        "model_provider": "local",
-        "model_api_key": "",
-        "model_validation_result": None,
-        "selected_pack": "",
-        "quiz_difficulty": "medium",
-        # action flags set by sidebar/pill buttons, consumed by render_main
-        "_send_text": None,        # text to send in this rerun
-        "_upload_done": set(),     # set of file names already processed
+def _active_provider() -> str:
+    # Prefer stable session state over widget state to avoid rerun-order drift.
+    p = (st.session_state.get("model_provider") or st.session_state.get("_model_provider_selected") or "").strip().lower()
+    if p in PROVIDERS:
+        return p
+    sel = (st.session_state.get("model_provider_widget") or "").strip().lower()
+    if sel in PROVIDERS:
+        return sel
+    return "local"
+
+def _active_api_key(provider: str | None = None) -> str:
+    p = (provider or _active_provider() or "").strip().lower()
+    byp = st.session_state.get("_api_keys_by_provider") or {}
+    mapped = (byp.get(p) or "").strip()
+    if mapped:
+        return mapped
+    ui_key = (st.session_state.get("model_api_key") or "").strip()
+    if ui_key:
+        return ui_key
+    env_map = {
+        "claude": ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
+        "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        "openai": ["OPENAI_API_KEY"],
+        "copilot": ["GITHUB_TOKEN", "COPILOT_API_KEY"],
     }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+    for name in env_map.get(p, []):
+        val = (os.getenv(name) or "").strip()
+        if val:
+            return val
+    return ""
 
-_init_state()
+def _new_chat(topic="New Chat"):
+    cid=str(uuid.uuid4())
+    st.session_state.chats.insert(0,dict(id=cid,topic=topic,messages=[],
+        doc_id=None,docs=[],quiz_state=None,show_quiz_setup=False,quiz_topic="",quiz_doc_id=None))
+    st.session_state.active_chat_id=cid
+    return cid
 
-# ── Utility helpers ───────────────────────────────────────────────────────────
+def _err():
+    p=_active_provider()
+    if not p: return "Select a model provider in the right panel."
+    if p!="local" and not _active_api_key(p):
+        return f"Enter API key for '{p}' in the right panel."
+    return ""
 
-def _active_chat():
-    cid = st.session_state.active_chat_id
-    return next((c for c in st.session_state.chats if c["id"] == cid), None)
+def _esc(t): return (t or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br>")
+def _esc_pre(t): return (t or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
+def _ensure_db():
+    if not st.session_state.get("_db_ready"):
+        from db.database import init_db
+        from services.rag_service import reload_indices_from_db
+        init_db()
+        reload_indices_from_db()
+        st.session_state._db_ready = True
 
-def _resolve_runtime_llm():
-    provider = st.session_state.get("model_provider", "local")
-    api_key = (st.session_state.get("model_api_key") or "").strip() or None
-    cfg = RuntimeModelConfig(
-        provider=provider if provider != "local" else "ollama",
-        model=None,
-        api_key=api_key,
-        base_url=None,
-    )
+def _build_llm():
+    from services.model_provider import RuntimeModelConfig, build_runtime_llm
+    from configs.config import LLM_MODEL, LLM_TEMPERATURE
+    p = _active_provider()
+    k = _active_api_key(p)
+    cfg = RuntimeModelConfig(provider=p, api_key=k or None)
     return build_runtime_llm(cfg, default_model=LLM_MODEL, default_temperature=LLM_TEMPERATURE)
 
-
-def _new_chat_id():
-    return str(uuid.uuid4())
-
-
-def _build_context(messages):
-    parts = []
-    for m in messages:
-        if m["role"] == "user":
-            parts.append(f"User: {m['text']}")
-        elif m["role"] == "assistant" and m.get("sections"):
-            s = m["sections"]
-            sub = []
-            if s.get("Explanation"):
-                sub.append(f"Explanation: {s['Explanation']}")
-            if s.get("Example"):
-                sub.append(f"Example: {s['Example']}")
-            if s.get("Question"):
-                sub.append(f"Question: {s['Question']}")
-            if s.get("Feedback"):
-                sub.append(f"Feedback: {s['Feedback']}")
-            if sub:
-                parts.append("\n".join(sub))
-    return "\n\n".join(parts)
-
-
-def _looks_like_answer(text):
-    value = (text or "").strip()
-    if not value or value.endswith("?"):
-        return False
-    lower = value.lower()
-    if re.match(r"^(because|i think|it is|it was|they are|they were|yes|no|my answer|answer:)\b", lower):
-        return True
-    return len(lower.split()) <= 18
-
-
 def _run_async(coro):
-    """Run a coroutine from synchronous Streamlit code."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            raise RuntimeError
+        asyncio.get_running_loop()
     except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+        return asyncio.run(coro)
 
+    box = {"result": None, "error": None}
 
-# ── Core backend calls ────────────────────────────────────────────────────────
+    def _runner():
+        try:
+            box["result"] = asyncio.run(coro)
+        except Exception as exc:
+            box["error"] = exc
 
-def call_explain(topic, age, context, doc_id, user_answer,
-                 profession, expertise_level, area_of_interest,
-                 include_examples, include_questions, force_new_topic):
-    """Call the learning graph and return sections dict."""
-    runtime_llm = _resolve_runtime_llm()
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join()
+    if box["error"] is not None:
+        raise box["error"]
+    return box["result"]
 
-    messages = []
-    if context and not force_new_topic:
-        for line in context.strip().split("\n\n"):
-            if line.startswith("User: "):
-                messages.append({"role": "user", "content": line[6:]})
-            elif any(line.startswith(p) for p in ("Explanation: ", "Example: ", "Question: ", "Feedback: ")):
-                if not messages or messages[-1]["role"] != "assistant":
-                    messages.append({"role": "assistant", "content": line})
-                else:
-                    messages[-1]["content"] += "\n" + line
+def _llm_request_config():
+    from api.routes import ModelConfigRequest
+    provider = _active_provider()
+    api_key = _active_api_key(provider) or None
+    return ModelConfigRequest(provider=provider, api_key=api_key)
 
-    current_question = None
-    for msg in reversed(messages):
-        if msg.get("role") == "assistant" and "Question:" in msg.get("content", ""):
-            current_question = msg["content"].rsplit("Question:", 1)[1].strip()
-            break
-    if not current_question and context and "Question:" in context and not force_new_topic:
-        current_question = context.rsplit("Question:", 1)[1].strip()
-    if current_question:
-        for marker in ["\nUser:", "\nExplanation:", "\nExample:", "\nFeedback:"]:
-            if marker in current_question:
-                current_question = current_question.split(marker, 1)[0].strip()
+def _chat_messages_for_graph(chat):
+    out = []
+    for m in (chat or {}).get("messages", []):
+        role = m.get("role")
+        if role == "user":
+            txt = (m.get("text") or "").strip()
+            if txt:
+                out.append({"role": "user", "content": txt})
+            continue
+        if role != "assistant":
+            continue
+        secs = m.get("sections") or {}
+        if secs:
+            parts = []
+            if secs.get("Explanation"):
+                parts.append(f"Explanation: {secs['Explanation']}")
+            if secs.get("Example"):
+                parts.append(f"Example: {secs['Example']}")
+            if secs.get("Question"):
+                parts.append(f"Question: {secs['Question']}")
+            if secs.get("Feedback"):
+                parts.append(f"Feedback: {secs['Feedback']}")
+            txt = "\n".join(parts).strip()
+        else:
+            txt = (m.get("text") or m.get("error") or "").strip()
+        if txt:
+            out.append({"role": "assistant", "content": txt})
+    return out
 
-    messages.append({"role": "user", "content": topic})
+def _tts_payload_from_sections(sections):
+    if not sections:
+        return ""
+    parts = []
+    if sections.get("Explanation"):
+        parts.append(sections["Explanation"])
+    if sections.get("Example"):
+        parts.append(f"Example: {sections['Example']}")
+    if sections.get("Question"):
+        parts.append(f"Question: {sections['Question']}")
+    if sections.get("Feedback"):
+        parts.append(f"Feedback: {sections['Feedback']}")
+    return "\n\n".join([p for p in parts if p]).strip()
 
-    initial_state = {
+def _synthesize_audio(text):
+    payload = (text or "").strip()
+    if not payload:
+        return None
+    try:
+        from services.tts_service import synthesize_tts_mp3
+        audio_path = synthesize_tts_mp3(payload)
+        return str(audio_path) if audio_path else None
+    except Exception:
+        return None
+
+def _transcribe_audio_input(audio_file):
+    if audio_file is None:
+        return None
+    try:
+        import speech_recognition as sr
+    except Exception:
+        return None
+
+    try:
+        audio_bytes = audio_file.getvalue()
+        if not audio_bytes:
+            return None
+        audio_hash = hashlib.md5(audio_bytes).hexdigest()
+        if audio_hash == st.session_state.get("_last_mic_hash"):
+            return st.session_state.get("_last_mic_text") or None
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+            audio_data = recognizer.record(source)
+        transcript = (recognizer.recognize_google(audio_data) or "").strip()
+        st.session_state._last_mic_hash = audio_hash
+        st.session_state._last_mic_text = transcript
+        return transcript or None
+    except Exception:
+        return None
+
+def _chat_context_for_stream(chat):
+    lines = []
+    for m in (chat or {}).get("messages", []):
+        role = m.get("role")
+        if role == "user":
+            txt = (m.get("text") or "").strip()
+            if txt:
+                lines.append(f"User: {txt}")
+            continue
+        if role != "assistant":
+            continue
+        secs = m.get("sections") or {}
+        if secs.get("Explanation"):
+            lines.append(f"Explanation: {secs['Explanation']}")
+        if secs.get("Example"):
+            lines.append(f"Example: {secs['Example']}")
+        if secs.get("Question"):
+            lines.append(f"Question: {secs['Question']}")
+        if secs.get("Feedback"):
+            lines.append(f"Feedback: {secs['Feedback']}")
+    return "\n\n".join(lines)
+
+def _resolve_audio_event_path(audio_url):
+    url = (audio_url or "").strip()
+    if not url:
+        return None
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if os.path.exists(url):
+        return url
+    if url.startswith("/audio/"):
+        from services.tts_service import get_audio_dir
+        name = os.path.basename(url)
+        path = get_audio_dir() / name
+        if path.exists():
+            return str(path)
+        backend_base = (os.getenv("BACKEND_URL") or "http://localhost:8001").strip().rstrip("/")
+        return f"{backend_base}{url}"
+    return None
+
+def _render_audio_if_available(audio_path):
+    if not audio_path or audio_path == "None":
+        return
+    resolved = _resolve_audio_event_path(audio_path)
+    if not resolved and os.path.exists(audio_path):
+        resolved = audio_path
+    if resolved:
+        try:
+            st.audio(resolved, format="audio/mp3")
+        except Exception:
+            st.caption("Audio unavailable for this response.")
+
+def _queue_send(text, force_fresh=False):
+    payload = (text or "").strip()
+    if not payload:
+        return
+    st.session_state._pending_send_text = payload
+    st.session_state._pending_send_force_fresh = bool(force_fresh)
+    # Snapshot checkbox values NOW so render-cycle ordering can't stale them
+    st.session_state._pending_include_examples = bool(st.session_state.get("include_examples", False))
+    st.session_state._pending_include_questions = bool(st.session_state.get("include_questions", False))
+    st.session_state._is_generating = True
+
+def _render_live_sections(placeholders, sections):
+    feedback = (sections.get("Feedback") or "").strip()
+    if feedback:
+        placeholders["explanation"].empty()
+        placeholders["example"].empty()
+        placeholders["question"].empty()
+        placeholders["feedback"].markdown(
+            f'<div class="ma"><div class="ma-i"><div class="ma-w">Assistant</div>'
+            f'<div class="sb sb-f"><span class="st2 st-f">Feedback</span>{_esc(feedback)}</div></div></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    placeholders["feedback"].empty()
+    exp = (sections.get("Explanation") or "").strip()
+    ex = (sections.get("Example") or "").strip()
+    q = (sections.get("Question") or "").strip()
+    if exp:
+        placeholders["explanation"].markdown(
+            f'<div class="ma"><div class="ma-i"><div class="ma-w">Assistant</div>'
+            f'<div class="sb sb-e"><span class="st2 st-e">Explanation</span>{_esc(exp)}</div></div></div>',
+            unsafe_allow_html=True,
+        )
+    if ex:
+        placeholders["example"].markdown(
+            f'<div class="ma"><div class="ma-i"><div class="sb sb-ex">'
+            f'<span class="st2 st-ex">Example</span>{_esc(ex)}</div></div></div>',
+            unsafe_allow_html=True,
+        )
+    if q:
+        placeholders["question"].markdown(
+            f'<div class="ma"><div class="ma-i"><div class="sb sb-q">'
+            f'<span class="st2 st-q">Question to Think About</span>{_esc(q)}</div></div></div>',
+            unsafe_allow_html=True,
+        )
+
+def call_explain_stream(topic, **kw):
+    from api.routes import ExplainRequest, explain_stream
+
+    chat = kw.get("chat")
+    request = ExplainRequest(
+        topic=topic,
+        age=kw.get("age", st.session_state.age),
+        context=kw.get("context") or _chat_context_for_stream(chat),
+        doc_id=kw.get("doc_id"),
+        user_answer=kw.get("user_answer"),
+        profession=st.session_state.profession,
+        expertise_level=st.session_state.expertise_level,
+        area_of_interest=st.session_state.area_of_interest,
+        include_examples=bool(st.session_state.get("_pending_include_examples", st.session_state.get("include_examples", False))),
+        include_questions=bool(st.session_state.get("_pending_include_questions", st.session_state.get("include_questions", False))),
+        force_new_topic=bool(kw.get("force_new_topic", False)),
+        llm_config=_llm_request_config(),
+    )
+
+    response = _run_async(explain_stream(request))
+    sections = {"Explanation": "", "Example": "", "Question": "", "Feedback": ""}
+    audio_path = None
+    on_update = kw.get("on_update")
+
+    async def _consume_stream():
+        nonlocal audio_path
+        buffer = ""
+        async for chunk in response.body_iterator:
+            text = chunk.decode("utf-8", errors="ignore") if isinstance(chunk, bytes) else str(chunk)
+            buffer += text
+            while "\n\n" in buffer:
+                frame, buffer = buffer.split("\n\n", 1)
+                data_lines = []
+                for ln in frame.splitlines():
+                    if ln.startswith("data:"):
+                        data_lines.append(ln[5:].strip())
+                if not data_lines:
+                    continue
+                try:
+                    payload = json.loads("\n".join(data_lines))
+                except Exception:
+                    continue
+
+                evt_type = payload.get("type")
+                if evt_type == "update":
+                    section = payload.get("section")
+                    if section in sections:
+                        sections[section] = payload.get("text") or ""
+                        if callable(on_update):
+                            on_update(dict(sections))
+                elif evt_type == "audio":
+                    audio_path = _resolve_audio_event_path(payload.get("url"))
+                elif evt_type == "error":
+                    err = (payload.get("error") or "Stream error").strip()
+                    has_partial = any((sections.get(k) or "").strip() for k in sections)
+                    if has_partial:
+                        continue
+                    raise RuntimeError(err)
+
+    _run_async(_consume_stream())
+    return sections, audio_path
+
+def call_explain(topic, **kw):
+    from graph import learning_graph
+    from configs.config import use_request_llm
+    _ensure_db()
+    runtime_llm = _build_llm()
+    chat = kw.get("chat")
+    force_new_topic = bool(kw.get("force_new_topic", False))
+    messages = kw.get("messages") or _chat_messages_for_graph(chat)
+    if not messages:
+        messages = [{"role": "user", "content": topic}]
+    state = {
         "user_input": topic,
         "messages": messages,
         "learner": {
-            "age": age,
+            "age": kw.get("age", st.session_state.age),
             "difficulty": "medium",
-            "profession": profession,
-            "expertise_level": expertise_level,
-            "area_of_interest": area_of_interest,
+            "profession": st.session_state.profession,
+            "expertise_level": st.session_state.expertise_level,
+            "area_of_interest": st.session_state.area_of_interest,
         },
         "intent": "new_question",
-        "doc_id": doc_id,
-        "include_examples": include_examples,
-        "include_questions": include_questions,
+        "doc_id": kw.get("doc_id"),
+        "include_examples": st.session_state.include_examples,
+        "include_questions": st.session_state.include_questions,
         "force_new_topic": force_new_topic,
-        "model_provider": st.session_state.get("model_provider", "local") if st.session_state.get("model_provider") != "local" else "ollama",
-        "model_name": LLM_MODEL,
-        "retrieved_context": None,
-        "rag_sources": None,
-        "simplified_explanation": None,
-        "example": None,
-        "safety_checked_text": None,
-        "thought_question": None,
-        "current_question": current_question,
-        "quiz_question": None,
-        "quiz_options": None,
-        "correct_answer": None,
-        "user_answer": user_answer,
-        "score": None,
-        "final_output": None,
-        "feedback": None,
+        "retrieved_context": None, "rag_sources": None,
+        "simplified_explanation": None, "example": None,
+        "safe_text": None, "safety_checked_text": None,
+        "thought_question": None, "quiz_question": None,
+        "quiz_options": None, "correct_answer": None,
+        "user_answer": None, "score": None,
+        "final_output": None, "feedback": None,
     }
-
-    async def _run():
-        with use_request_llm(runtime_llm):
-            return await learning_graph.ainvoke(initial_state)
-
-    result = _run_async(_run())
-    final_output = result.get("final_output") or {}
-
+    with use_request_llm(runtime_llm):
+        result = learning_graph.invoke(state)
+    fo = result.get("final_output") or {}
     return {
-        "Explanation": final_output.get("explanation") or result.get("safe_text") or result.get("simplified_explanation") or "",
-        "Example": final_output.get("example") or result.get("example") or "",
-        "Question": final_output.get("think_question") or result.get("thought_question") or "",
-        "Feedback": final_output.get("feedback") or result.get("feedback") or "",
+        "Explanation": fo.get("explanation") or result.get("safe_text") or result.get("simplified_explanation") or "",
+        "Example": fo.get("example") or result.get("example") or "",
+        "Question": fo.get("think_question") or result.get("thought_question") or "",
+        "Feedback": result.get("feedback") or "",
     }
 
-
-def call_upload_document(file_bytes, filename, content_type, age,
-                          profession, expertise_level, area_of_interest):
-    runtime_llm = _resolve_runtime_llm()
-    if not file_bytes:
-        raise ValueError("Empty file")
-    if len(file_bytes) > 20 * 1024 * 1024:
-        raise ValueError("File too large (max 20 MB)")
-
-    extracted_text, parser = extract_document_text(filename, content_type, file_bytes)
-    cleaned_text = (extracted_text or "").strip()
-    if len(cleaned_text) < 80:
-        raise ValueError("Could not extract enough readable text from this file")
-
-    content_hash = hashlib.sha256(file_bytes).hexdigest()
+def call_upload(fb, fn, **kw):
+    from services.document_service import extract_document_text, summarize_with_fallback
+    from services.rag_service import get_rag_service
+    from db.database import save_document, get_document_by_content_hash
+    import hashlib as _hlib
+    _ensure_db()
+    runtime_llm = _build_llm()
+    content_hash = _hlib.sha256(fb).hexdigest()
     existing = get_document_by_content_hash(content_hash)
-
     if existing:
         doc_id = existing["doc_id"]
-        rag_service = get_rag_service()
-        if doc_id not in rag_service.indices:
-            rag_service.index_document(doc_id, existing["text"])
+        rag = get_rag_service()
+        if doc_id not in rag.indices:
+            rag.index_document(doc_id, existing["text"])
         summary, _ = summarize_with_fallback(
-            existing["text"], age, runtime_llm,
-            profession=profession or "", expertise_level=expertise_level or "",
-            area_of_interest=area_of_interest or "",
+            existing["text"], st.session_state.age, runtime_llm,
+            profession=st.session_state.profession,
+            expertise_level=st.session_state.expertise_level,
+            area_of_interest=st.session_state.area_of_interest,
         )
-        return {"doc_id": doc_id, "filename": filename, "summary": summary}
-
+        return {"doc_id": doc_id, "filename": fn, "summary": summary}
+    extracted, parser = extract_document_text(fn, "", fb)
+    cleaned = (extracted or "").strip()
+    if len(cleaned) < 80:
+        raise ValueError("Could not extract enough readable text from this file")
     summary, _ = summarize_with_fallback(
-        cleaned_text, age, runtime_llm,
-        profession=profession or "", expertise_level=expertise_level or "",
-        area_of_interest=area_of_interest or "",
+        cleaned, st.session_state.age, runtime_llm,
+        profession=st.session_state.profession,
+        expertise_level=st.session_state.expertise_level,
+        area_of_interest=st.session_state.area_of_interest,
     )
     doc_id = str(uuid.uuid4())
-    save_document(doc_id, filename, cleaned_text, parser, content_hash=content_hash)
-    get_rag_service().index_document(doc_id, cleaned_text)
-    return {"doc_id": doc_id, "filename": filename, "summary": summary}
+    save_document(doc_id, fn, cleaned, parser, content_hash=content_hash)
+    get_rag_service().index_document(doc_id, cleaned)
+    return {"doc_id": doc_id, "filename": fn, "summary": summary}
 
-
-def call_generate_quiz(topic, age, num_questions, difficulty, doc_id,
-                        profession, expertise_level, area_of_interest):
-    from api.routes import (
-        _normalize_ocr_quiz_text, _is_doc_grounded_question,
-        _build_source_fallback_question, QUIZ_SOURCE_MAX_CHUNKS,
-        QUIZ_SOURCE_MAX_CHARS_PER_CHUNK, _clip_chunk_for_quiz,
+def call_quiz(topic, num, **kw):
+    from api.routes import QuizGenerateRequest, generate_quiz
+    _ensure_db()
+    req = QuizGenerateRequest(
+        topic=topic,
+        age=st.session_state.age,
+        num_questions=num,
+        difficulty=kw.get("difficulty", st.session_state.quiz_difficulty),
+        doc_id=kw.get("doc_id"),
+        profession=st.session_state.profession,
+        expertise_level=st.session_state.expertise_level,
+        area_of_interest=st.session_state.area_of_interest,
+        llm_config=_llm_request_config(),
     )
-    runtime_llm = _resolve_runtime_llm()
-    difficulty_level = DIFFICULTY_MAP.get(difficulty, "moderate difficulty with some critical thinking")
-    learner_profile = (
-        "Learner profile:\n"
-        f"- Profession: {profession or 'Not provided'}\n"
-        f"- Expertise level: {expertise_level or 'Not provided'}\n"
-        f"- Area of interest: {area_of_interest or 'Not provided'}"
-    )
+    data = _run_async(generate_quiz(req)) or {}
+    questions = data.get("questions") or []
+    return questions[:num] if questions else [{
+        "question": f"What is an important concept in {topic}?",
+        "options": {"A": "Core concepts", "B": "Advanced topics", "C": "Real-world use", "D": "All of these"},
+        "correct": "D", "explanation": f"All aspects of {topic} are important.",
+    }]
 
-    source_blocks, verbatim_chunks, source_section, doc_context = [], [], "", ""
-
-    if doc_id:
-        doc = get_document(doc_id)
-        if not doc:
-            raise ValueError("Document not found")
-        rag_svc = get_rag_service()
-        if doc_id not in rag_svc.indices:
-            rag_svc.index_document(doc_id, (doc.get("text") or "").strip())
-        all_chunks = rag_svc.indices[doc_id].chunks if doc_id in rag_svc.indices else []
-        if all_chunks:
-            retrieved = rag_svc.indices[doc_id].retrieve(topic or "key concepts", top_k=QUIZ_SOURCE_MAX_CHUNKS)
-            sampled = [c for c, _ in retrieved] if retrieved else all_chunks[::max(1, len(all_chunks) // QUIZ_SOURCE_MAX_CHUNKS)][:QUIZ_SOURCE_MAX_CHUNKS]
-            verbatim_chunks = [_clip_chunk_for_quiz(c, QUIZ_SOURCE_MAX_CHARS_PER_CHUNK) for c in sampled if c.strip()]
-            source_blocks = verbatim_chunks[:]
-        else:
-            doc_context = _normalize_ocr_quiz_text((doc.get("text") or "").strip()[:10000])
-            source_blocks = [doc_context] if doc_context else []
-
-    if verbatim_chunks:
-        passages = "\n\n".join(f"[{i+1}] {c}" for i, c in enumerate(verbatim_chunks))
-        source_section = f"SOURCE PASSAGES (verbatim from the document):\n{passages}"
-    elif doc_context:
-        source_section = f"DOCUMENT TEXT:\n{doc_context}"
-
-    if source_section:
-        prompt = (
-            f'You are writing a quiz focused on the topic: "{topic}". Every question must come DIRECTLY from the source passages.\n\n'
-            f'{learner_profile}\n\nRULES:\n1. Only write questions relevant to this topic.\n'
-            f'2. Correct answers must be facts directly stated in the passages.\n'
-            f'3. Difficulty: {difficulty_level}\n\n{source_section}\n\n'
-            f'Create exactly {num_questions} questions in this EXACT format:\n\n'
-            f'Q1: [Question]\nA) [Option]\nB) [Option]\nC) [Option]\nD) [Option]\n'
-            f'Correct: [A, B, C, or D]\nExplanation: [A clear supporting sentence]\n\nContinue for all {num_questions} questions.'
-        )
-    else:
-        prompt = (
-            f'Create {num_questions} quiz questions about {topic} for age {age}.\n\n'
-            f'{learner_profile}\n\nRules:\n- Difficulty: {difficulty_level}\n\n'
-            f'For each question use this EXACT format:\n\n'
-            f'Q1: [Question text]\nA) [First option]\nB) [Second option]\nC) [Third option]\nD) [Fourth option]\n'
-            f'Correct: [A, B, C, or D]\nExplanation: [Why this answer is correct]\n\nContinue for all {num_questions} questions.'
-        )
-
-    raw = runtime_llm.invoke(prompt)
-    response = _normalize_ocr_quiz_text((raw or "").strip())
-    questions = [_sanitize_quiz_question(q) for q in _parse_quiz_response(response, num_questions)]
-
-    if doc_id and source_blocks:
-        questions = [q for q in questions if _is_doc_grounded_question(q, source_blocks)]
-        while len(questions) < num_questions:
-            questions.append(_build_source_fallback_question(topic, source_blocks, len(questions)))
-
-    if not questions:
-        questions = [{
-            "question": f"What is an important concept related to {topic}?",
-            "options": {"A": "The basics", "B": "Advanced concepts", "C": "Real-world applications", "D": "All of the above"},
-            "correct": "D", "explanation": "All aspects are important!",
-        }]
-    return questions[:num_questions]
-
-
-def call_validate_model():
+def call_validate():
     try:
-        response = _resolve_runtime_llm().invoke("Reply with exactly OK")
-        return True, f"Connected. Model responded: {(response or '').strip()[:80]}"
-    except Exception as exc:
-        return False, str(exc)
+        from api.routes import ValidateModelRequest, validate_model
+        req = ValidateModelRequest(llm_config=_llm_request_config(), prompt="Reply with exactly OK")
+        result = _run_async(validate_model(req)) or {}
+        return bool(result.get("ok")), (result.get("preview") or "Connected").strip()[:120]
+    except Exception as e:
+        return False, str(e)
 
-
-# ── Action handlers ────────────────────────────────────────────────────────────
-
-def handle_send(text):
-    text = text.strip()
-    if not text:
-        return
-
-    is_known = text.lower() in KNOWN_TOPICS
-    force_fresh = is_known  # pill/pack clicks set _send_text and pass force_fresh via flag below
-
-    chat_id = st.session_state.active_chat_id
-    if not chat_id:
-        chat_id = _new_chat_id()
-        st.session_state.chats.insert(0, {
-            "id": chat_id, "topic": text,
-            "messages": [], "doc_id": None, "docs": [],
-            "quiz_state": None, "show_quiz_setup": False,
-            "quiz_topic": "", "quiz_doc_id": None,
-        })
-        st.session_state.active_chat_id = chat_id
-
-    chat = next(c for c in st.session_state.chats if c["id"] == chat_id)
-
-    # Check if this is a "force fresh" send (set by topic pill / pack button)
-    force_fresh = force_fresh or st.session_state.pop("_force_fresh", False)
-    if force_fresh:
-        st.session_state.last_question = ""
-        chat["topic"] = text
-
-    chat["messages"].append({"role": "user", "text": text})
-
-    context = "" if force_fresh else _build_context(chat["messages"][:-1])
-    pending_q = "" if force_fresh else st.session_state.last_question
-    user_answer_hint = text if (pending_q and _looks_like_answer(text)) else None
-
+def do_send(text,force_fresh=False,live_target=None):
+    text=text.strip()
+    if not text: return
+    if not st.session_state.active_chat_id: _new_chat(text)
+    chat=next(c for c in st.session_state.chats if c["id"]==st.session_state.active_chat_id)
+    e=_err()
+    if e: chat["messages"].append({"role":"assistant","error":e,"sections":None}); return
+    if force_fresh: st.session_state.last_question=""; chat["topic"]=text
+    chat["messages"].append({"role":"user","text":text})
+    live_box = live_target or st.container()
+    live_placeholders = {}
+    with live_box:
+        live_placeholders = {
+            "explanation": st.empty(),
+            "example": st.empty(),
+            "question": st.empty(),
+            "feedback": st.empty(),
+        }
     with st.spinner("Thinking…"):
         try:
-            sections = call_explain(
-                topic=text, age=st.session_state.age,
-                context=context, doc_id=chat.get("doc_id"),
-                user_answer=user_answer_hint,
-                profession=st.session_state.profession,
-                expertise_level=st.session_state.expertise_level,
-                area_of_interest=st.session_state.area_of_interest,
-                include_examples=st.session_state.include_examples,
-                include_questions=st.session_state.include_questions,
+            s, audio_path = call_explain_stream(
+                topic=text,
+                age=st.session_state.age,
+                doc_id=chat.get("doc_id"),
+                chat=chat,
                 force_new_topic=force_fresh,
+                on_update=lambda sections: _render_live_sections(live_placeholders, sections),
             )
-            if sections.get("Question"):
-                st.session_state.last_question = sections["Question"]
-            chat["messages"].append({"role": "assistant", "sections": sections})
-        except Exception as exc:
-            chat["messages"].append({"role": "assistant", "sections": {}, "error": str(exc)})
+            # Keep the same streamed bubble visible until rerun so there is no visual gap.
+            _render_live_sections(live_placeholders, s)
+            if s.get("Question"): st.session_state.last_question=s["Question"]
+            if not audio_path:
+                audio_path = _synthesize_audio(_tts_payload_from_sections(s))
+            chat["messages"].append({"role":"assistant","sections":s,"text":"","audio_path":audio_path})
+        except Exception as ex:
+            chat["messages"].append({"role":"assistant","sections":None,"error":str(ex)})
 
-
-def handle_upload(uploaded_file):
-    file_bytes = uploaded_file.read()
-    filename = uploaded_file.name
-    content_type = uploaded_file.type or ""
-
-    # Guard: skip if already processed this file in this session
-    done_set = st.session_state._upload_done
-    file_key = f"{filename}:{hashlib.md5(file_bytes).hexdigest()[:8]}"
-    if file_key in done_set:
+def paste_to_prompt(text):
+    text=(text or "").strip()
+    if not text:
         return
-    done_set.add(file_key)
+    st.session_state._pending_prompt_text = text
 
-    chat_id = st.session_state.active_chat_id
-    if not chat_id:
-        chat_id = _new_chat_id()
-        st.session_state.chats.insert(0, {
-            "id": chat_id, "topic": f"Document: {filename}",
-            "messages": [], "doc_id": None, "docs": [],
-            "quiz_state": None, "show_quiz_setup": False,
-            "quiz_topic": "", "quiz_doc_id": None,
-        })
-        st.session_state.active_chat_id = chat_id
-
-    chat = next(c for c in st.session_state.chats if c["id"] == chat_id)
-
-    with st.spinner(f"Uploading and summarizing {filename}…"):
+def do_upload(f):
+    fb=f.read(); fn=f.name
+    key=f"{fn}:{hashlib.md5(fb).hexdigest()[:8]}"
+    if key in st.session_state._upload_done: return
+    st.session_state._upload_done.add(key)
+    if not st.session_state.active_chat_id: _new_chat(f"Document: {fn}")
+    chat=next(c for c in st.session_state.chats if c["id"]==st.session_state.active_chat_id)
+    with st.spinner(f"Uploading {fn}…"):
         try:
-            result = call_upload_document(
-                file_bytes=file_bytes, filename=filename, content_type=content_type,
-                age=st.session_state.age, profession=st.session_state.profession,
-                expertise_level=st.session_state.expertise_level,
-                area_of_interest=st.session_state.area_of_interest,
-            )
-            doc_id = result["doc_id"]
-            chat["doc_id"] = doc_id
-            existing_ids = {d["doc_id"] for d in chat.get("docs", [])}
-            if doc_id not in existing_ids:
-                chat.setdefault("docs", []).append({"doc_id": doc_id, "filename": filename})
-            chat["messages"].append({
-                "role": "assistant",
-                "text": f"Document Summary: {filename}\n\n{result['summary']}",
-            })
-        except Exception as exc:
-            chat["messages"].append({"role": "assistant", "text": f"Upload failed: {exc}"})
+            r=call_upload(fb,fn); doc_id=r["doc_id"]
+            chat["doc_id"]=doc_id
+            if doc_id not in {d["doc_id"] for d in chat.get("docs",[])}:
+                chat.setdefault("docs",[]).append({"doc_id":doc_id,"filename":fn})
+            audio_path=_synthesize_audio(r.get("summary") or "")
+            chat["messages"].append({"role":"assistant","sections":None,
+                "text":f"Document Summary: {fn}\n\n{r['summary']}","audio_path":audio_path})
+        except Exception as ex:
+            chat["messages"].append({"role":"assistant","sections":None,"text":f"Upload failed: {ex}"})
 
-
-def handle_generate_quiz(chat):
-    quiz_topic = (chat.get("quiz_topic") or "").strip()
-    if not quiz_topic:
-        st.error("Please enter a topic for the quiz!")
-        return
+def do_quiz(chat):
+    qt=(chat.get("quiz_topic") or "").strip()
+    docs=chat.get("docs") or ([{"doc_id":chat["doc_id"],"filename":"Uploaded document"}] if chat.get("doc_id") else [])
+    if not qt and not docs: st.error("Enter a topic."); return
     with st.spinner("Generating quiz…"):
         try:
-            questions = call_generate_quiz(
-                topic=quiz_topic, age=st.session_state.age, num_questions=5,
+            qs=call_quiz(topic=qt or "the document",num=5,
                 difficulty=st.session_state.quiz_difficulty,
-                doc_id=chat.get("quiz_doc_id") or chat.get("doc_id"),
-                profession=st.session_state.profession,
-                expertise_level=st.session_state.expertise_level,
                 area_of_interest=st.session_state.area_of_interest,
-            )
-            chat["quiz_state"] = {
-                "topic": quiz_topic, "questions": questions,
-                "current_index": 0, "score": 0, "answers": [],
-                "showing_feedback": False, "current_is_correct": None, "completed": False,
-            }
-            chat["show_quiz_setup"] = False
-        except Exception as exc:
-            st.error(f"Failed to generate quiz: {exc}")
+                doc_id=chat.get("quiz_doc_id") or chat.get("doc_id"))
+            chat["quiz_state"]=dict(topic=qt or "Document Quiz",questions=qs,current_index=0,
+                score=0,answers=[],showing_feedback=False,current_is_correct=None,completed=False)
+            chat["show_quiz_setup"]=False
+        except Exception as ex: st.error(f"Failed: {ex}")
 
-
-# ── CSS ────────────────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────────────────────
+# CSS — scoped carefully, no broad overrides that fight Streamlit
+# ─────────────────────────────────────────────────────────────────────────────
 def _inject_css():
-    st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap');
+    css_path = os.path.join(_HERE, "css", "styles.css")
+    try:
+        with open(css_path, "r") as f:
+            css_content = f.read()
+        st.markdown(f"<style>{css_content}</style>", unsafe_allow_html=True)
+    except FileNotFoundError:
+        st.error(f"CSS file not found at {css_path}")
 
-/* ── Reset & tokens ── */
-:root {
-  --bg-main:   #f4f7f8;
-  --bg-panel:  #fdfefe;
-  --bg-strong: #edf3f3;
-  --bg-chat:   #ffffff;
-  --brand:     #0f766e;
-  --brand-h:   #0b5f59;
-  --text-s:    #0f1722;
-  --text-b:    #2a3b49;
-  --text-m:    #6b7d8c;
-  --line-s:    #d9e2e6;
-  --line-st:   #b9c8cf;
-  --shadow-s:  0 8px 22px rgba(22,40,54,.08);
-  --shadow-p:  0 14px 30px rgba(16,40,56,.12);
-}
+def _inject_js():
+    st.markdown("""<script>
+(function(){
+  // JS runs inside a Streamlit iframe; DOM elements injected via st.markdown
+  // also live inside iframes. Walk all frames to find our elements.
+  function getDoc(){
+    // Try parent frames first (script may run in a nested iframe)
+    try{ if(window.parent && window.parent.document) return window.parent.document; }catch(_e){}
+    return document;
+  }
 
-html, body, [data-testid="stAppViewContainer"] {
-  font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-  background:
-    radial-gradient(circle at 10% 12%, #d5ece8 0%, transparent 36%),
-    radial-gradient(circle at 88% 15%, #cfe9e4 0%, transparent 34%),
-    linear-gradient(155deg, #f8fbfb 0%, #eef4f4 100%) !important;
-  color: var(--text-b) !important;
-}
+  /* ── 1. White cards ── */
+  function fixCards(){
+    var D=getDoc();
+    // Page background — teal green
+    var app=D.querySelector('[data-testid="stApp"]');
+    if(app) app.style.background='#0d6b63';
+    var vc=D.querySelector('[data-testid="stAppViewContainer"]');
+    if(vc) vc.style.background='#0d6b63';
+    var cols=D.querySelectorAll('[data-testid="column"]');
+    // All panels: white box on teal background
+        [0,1,2].forEach(function(i){
+      if(!cols[i]) return;
+      var w=cols[i].querySelector('[data-testid="stVerticalBlockBorderWrapper"]');
+      if(!w) return;
+      w.style.background='#ffffff';
+      w.style.borderRadius='18px';
+      w.style.border='none';
+      w.style.overflow='hidden';
+            if(i===1){
+                w.style.boxShadow='0 10px 32px rgba(0,0,0,0.28), 0 32px 72px rgba(0,0,0,0.36)';
+            } else {
+                w.style.boxShadow='0 8px 24px rgba(0,0,0,0.22), 0 24px 60px rgba(0,0,0,0.30)';
+            }
+    });
+  }
 
-/* ── Remove Streamlit chrome ── */
-#MainMenu, footer, header { visibility: hidden; height: 0; }
-[data-testid="stToolbar"] { display: none; }
-.block-container { padding-top: 1rem !important; padding-bottom: 0 !important; }
-
-/* ── Left sidebar ── */
-section[data-testid="stSidebar"] {
-  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-strong) 100%) !important;
-  border-right: 1px solid var(--line-s) !important;
-  box-shadow: var(--shadow-s) !important;
-}
-section[data-testid="stSidebar"] > div { padding-top: 1rem; }
-
-/* sidebar headings */
-section[data-testid="stSidebar"] .stMarkdown h3 {
-  font-size: .75rem !important;
-  letter-spacing: .12em !important;
-  text-transform: uppercase !important;
-  color: var(--text-m) !important;
-  margin: 14px 0 8px !important;
-  font-weight: 700 !important;
-}
-
-/* ── Sidebar "new chat" button ── */
-section[data-testid="stSidebar"] .stButton:first-of-type > button {
-  background: linear-gradient(135deg, var(--brand) 0%, #109e93 100%) !important;
-  color: #fff !important;
-  border: 1px solid #0d5f59 !important;
-  border-radius: 12px !important;
-  font-weight: 800 !important;
-  font-size: .92rem !important;
-  transition: transform .14s, box-shadow .14s !important;
-}
-section[data-testid="stSidebar"] .stButton:first-of-type > button:hover {
-  transform: translateY(-1px) !important;
-  box-shadow: 0 10px 18px rgba(10,113,104,.24) !important;
-}
-
-/* ── Chat item buttons in sidebar ── */
-section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button {
-  background: transparent !important;
-  border: 1px solid transparent !important;
-  border-radius: 10px !important;
-  color: var(--text-b) !important;
-  font-size: .86rem !important;
-  text-align: left !important;
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  transition: background .14s, border-color .14s !important;
-}
-section[data-testid="stSidebar"] [data-testid="stHorizontalBlock"] button:hover {
-  background: #f2f7f8 !important;
-  border-color: #d3e0e3 !important;
-}
-
-/* ── Sidebar selects / inputs ── */
-section[data-testid="stSidebar"] .stSelectbox select,
-section[data-testid="stSidebar"] .stTextInput input {
-  border-radius: 10px !important;
-  border: 1px solid var(--line-st) !important;
-  color: var(--text-b) !important;
-  font-size: .88rem !important;
-  background: #fff !important;
-}
-section[data-testid="stSidebar"] label { color: var(--text-s) !important; font-weight: 600 !important; font-size: .84rem !important; }
-
-/* ── Main area panels ── */
-[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"] {
-  background: var(--bg-chat);
-  border-radius: 16px;
-  border: 1px solid var(--line-s);
-  box-shadow: var(--shadow-p);
-}
-
-/* ── Message bubbles ── */
-.msg-user-wrap {
-  display: flex; justify-content: flex-end; margin: 10px 0 10px 20%;
-}
-.msg-user-inner {
-  background: #dff3ee;
-  border: 1px solid #bfe2d8;
-  border-radius: 8px;
-  padding: 6px 12px;
-  color: #133946;
-  font-size: .93rem;
-  line-height: 1.5;
-  word-break: break-word;
-  position: relative;
-}
-.msg-who-user {
-  font-size: 11px; font-weight: 600; color: #6b7280;
-  text-align: right; margin-bottom: 3px;
-}
-
-.msg-assistant-wrap {
-  margin: 10px 20% 10px 0;
-}
-.msg-assistant-inner {
-  background: #f3f8f8;
-  border: 1px solid #d8e6e4;
-  border-radius: 8px;
-  padding: 8px 10px;
-  color: #1f3746;
-  font-size: .93rem;
-  word-break: break-word;
-}
-.msg-who-asst {
-  font-size: 12px; font-weight: 600; color: #5d7280; margin-bottom: 4px;
-}
-
-/* ── Section blocks inside assistant message ── */
-.sec-block {
-  white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;
-  line-height: 1.55; margin-bottom: 8px; padding: 8px;
-  border-radius: 6px; background: #fdfeff; font-size: .9rem;
-}
-.sec-explanation { border-left: 3px solid #10b981; }
-.sec-example     { border-left: 3px solid #fbbf24; }
-.sec-question    { border-left: 3px solid #2563eb; }
-.sec-feedback    { border-left: 3px solid #8b5cf6; background: #f3f4f6; }
-
-.sec-title {
-  font-size: 11px; font-weight: 700; letter-spacing: .06em;
-  text-transform: uppercase; margin-bottom: 4px;
-}
-.sec-title-explanation { color: #065f46; }
-.sec-title-example     { color: #92400e; }
-.sec-title-question    { color: #1e40af; }
-.sec-title-feedback    { color: #6d28d9; }
-
-/* ── Error bubble ── */
-.msg-error {
-  display: flex; align-items: flex-start; gap: 10px;
-  padding: 12px 16px; border-radius: 8px;
-  background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3);
-  color: #dc2626; font-size: .92rem; margin: 8px 0;
-}
-
-/* ── Topic pills ── */
-.topic-pill-btn {
-  background: #fff !important;
-  border: 1.5px solid #38bdf8 !important;
-  color: #0284c7 !important;
-  border-radius: 20px !important;
-  padding: 5px 14px !important;
-  font-size: 13px !important;
-  cursor: pointer !important;
-  transition: background .15s, color .15s, transform .1s !important;
-  font-family: inherit !important;
-}
-.topic-pill-btn:hover {
-  background: #0ea5e9 !important; color: #fff !important;
-  border-color: #0ea5e9 !important; transform: translateY(-1px) !important;
-}
-.summary-topic-box {
-  background: #f0f9ff; border: 1px solid #bae6fd;
-  border-radius: 10px; padding: 14px 16px; margin-top: 8px;
-}
-.summary-topic-box strong { display: block; font-size: 13px; color: #0369a1; margin-bottom: 10px; }
-.summary-topic-prompt { font-size: 12px; color: #64748b; font-style: italic; margin: 8px 0 0; }
-
-/* ── Right panel (settings column) ── */
-.right-panel {
-  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-strong) 100%);
-  border: 1px solid var(--line-s);
-  border-radius: 16px;
-  box-shadow: var(--shadow-s);
-  padding: 16px;
-  height: 100%;
-  overflow-y: auto;
-}
-.right-panel h4 {
-  font-size: .75rem; letter-spacing: .12em; text-transform: uppercase;
-  color: var(--text-m); margin: 14px 0 8px; font-weight: 700;
-}
-
-/* ── Primary action buttons ── */
-button[kind="primary"],
-.stButton > button[data-testid="baseButton-primary"] {
-  background: linear-gradient(135deg, var(--brand) 0%, #109e93 100%) !important;
-  border: 1px solid #0a5b56 !important;
-  border-radius: 10px !important;
-  color: #fff !important;
-  font-weight: 700 !important;
-  transition: transform .14s, box-shadow .14s !important;
-}
-button[kind="primary"]:hover {
-  transform: translateY(-1px) !important;
-  box-shadow: 0 8px 16px rgba(16,125,117,.3) !important;
-}
-
-/* ── Quiz progress bar ── */
-.quiz-bar-wrap {
-  width: 100%; height: 8px; border-radius: 999px;
-  background: #e8f1f6; overflow: hidden; margin: 8px 0 16px;
-}
-.quiz-bar-fill {
-  height: 100%; border-radius: inherit;
-  background: linear-gradient(90deg, #0f766e 0%, #18a59a 100%);
-  transition: width 220ms ease;
-}
-
-/* ── Quiz option buttons ── */
-.quiz-opt {
-  display: flex; align-items: flex-start; gap: 10px;
-  width: 100%; text-align: left; padding: 12px 13px;
-  border-radius: 10px; border: 1px solid #cfe0e7;
-  background: #fbfdff; color: #1f3746;
-  font-size: .92rem; line-height: 1.45;
-  cursor: pointer; transition: all .2s; margin-bottom: 10px;
-}
-.quiz-opt:hover { border-color: #4e95b7; background: #f2fbff; transform: translateX(2px); }
-.quiz-opt-key {
-  width: 24px; height: 24px; border-radius: 999px;
-  flex: 0 0 24px; display: inline-flex; align-items: center;
-  justify-content: center; background: #eaf4f8; color: #2f4c5c;
-  font-weight: 700; font-size: .78rem; margin-top: 1px;
-}
-.quiz-opt-correct { background: #e9faf3 !important; border-color: #10b981 !important; }
-.quiz-opt-incorrect { background: #fff0f0 !important; border-color: #ef4444 !important; }
-.quiz-opt-correct .quiz-opt-key { background: #d1fae5; color: #065f46; }
-.quiz-opt-incorrect .quiz-opt-key { background: #fee2e2; color: #991b1b; }
-
-.quiz-feedback-correct { background:#f0fbf6; border:1px solid #bde9d7; color:#135445;
-  border-radius:10px; padding:12px 13px; margin-top:12px; font-size:.9rem; line-height:1.45; }
-.quiz-feedback-incorrect { background:#fff5f5; border:1px solid #f6c8c8; color:#7f1d1d;
-  border-radius:10px; padding:12px 13px; margin-top:12px; font-size:.9rem; line-height:1.45; }
-
-/* ── Quiz results ── */
-.quiz-score-card {
-  padding: 22px 24px;
-  background: linear-gradient(135deg, #0f766e 0%, #109e93 100%);
-  color: #fff; border-radius: 12px;
-  font-size: 1.75rem; font-weight: 700;
-  text-align: center; border: 1px solid #0a5b56;
-  margin: 14px 0 20px;
-}
-.quiz-score-pct { font-size: .52em; margin-top: 8px; font-weight: 700; }
-.review-card {
-  background: #fff; border: 1px solid #d8e6e4;
-  border-radius: 10px; padding: 14px 16px;
-  margin-bottom: 12px; line-height: 1.5; color: #1f3746;
-}
-.review-card-correct  { border-left: 4px solid #10b981; }
-.review-card-incorrect { border-left: 4px solid #ef4444; }
-
-/* ── Chat input ── */
-[data-testid="stChatInput"] textarea {
-  background: #fcfefe !important;
-  border: 1px solid var(--line-st) !important;
-  border-radius: 14px !important;
-  font-size: .95rem !important;
-  color: var(--text-b) !important;
-  font-family: inherit !important;
-}
-[data-testid="stChatInput"] textarea:focus {
-  border-color: #2b8b83 !important;
-  box-shadow: 0 0 0 4px rgba(43,139,131,.15) !important;
-}
-[data-testid="stChatInputContainer"] {
-  background: linear-gradient(180deg, #fdfefe 0%, #f3f8f8 100%) !important;
-  border-top: 1px solid var(--line-s) !important;
-}
-
-/* ── Model validation ── */
-.val-ok  { color: #065f46; font-size: .84rem; margin-top: 4px; background: #d1fae5; padding: 6px 10px; border-radius: 8px; }
-.val-err { color: #991b1b; font-size: .84rem; margin-top: 4px; background: #fee2e2; padding: 6px 10px; border-radius: 8px; }
-
-/* ── Dividers ── */
-hr { border-color: var(--line-s) !important; margin: 12px 0 !important; }
-
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-thumb { background: #c4d4d8; border-radius: 4px; }
-</style>
-""", unsafe_allow_html=True)
+  /* ── 2. New Chat button — teal gradient ── */
+  function fixNewChat(){
+    var D=getDoc();
+    D.querySelectorAll('button').forEach(function(b){
+      if((b.innerText||'').includes('Start New Chat')){
+        b.style.background='linear-gradient(135deg,#0f766e 0%,#109e93 100%)';
+        b.style.color='#fff';
+        b.style.border='1px solid #0d5f59';
+        b.style.borderRadius='12px';
+        b.style.fontWeight='800';
+        b.style.width='100%';
+        b.style.padding='8px 16px';
+        b.style.boxShadow='0 4px 14px rgba(15,118,110,.28)';
+        b.style.fontFamily='Manrope,sans-serif';
+        b.style.letterSpacing='.02em';
+        b.style.marginBottom='4px';
+      }
+    });
+  }
 
 
-# ── Rendering helpers ─────────────────────────────────────────────────────────
+  /* ── 4. Collapse left-sidebar chat row gaps ── */
+  function fixChatGaps(){
+    var D=getDoc();
+    var cols=D.querySelectorAll('[data-testid="column"]');
+    if(!cols[0]) return;
+    var leftCol=cols[0];
+    // Zero gap on every stVerticalBlock inside left column
+    leftCol.querySelectorAll('[data-testid="stVerticalBlock"]').forEach(function(vb){
+      vb.style.gap='0';
+      vb.style.rowGap='0';
+    });
+    // Walk every node and collapse all margins/padding/minHeight
+    leftCol.querySelectorAll('[data-testid="element-container"],[data-testid="stHorizontalBlock"]').forEach(function(el){
+      el.style.margin='0';
+      el.style.padding='0';
+      el.style.minHeight='0';
+      if(el.parentElement){
+        el.parentElement.style.margin='0';
+        el.parentElement.style.padding='0';
+        el.parentElement.style.minHeight='0';
+      }
+    });
+    // Active state: buttons whose label starts with ►
+    leftCol.querySelectorAll('button').forEach(function(b){
+      var txt=(b.textContent||b.innerText||'').trim();
+      if(txt.charAt(0)==='►'){
+        b.style.background='#e2efee';
+        b.style.borderColor='#9cc5c1';
+        b.style.color='#114745';
+        b.style.fontWeight='700';
+      }
+    });
+  }
 
-def _parse_summary_topics(text):
-    HEADER = "Topics You Can Ask About:"
-    idx = text.find(HEADER)
-    if idx == -1:
-        return text, [], ""
-    before = text[:idx].rstrip()
-    rest = text[idx + len(HEADER):]
-    topics, after_lines = [], []
-    in_topics = True
+
+    /* ── 3. Composer action buttons row — left attach + right grouped quiz/mic/send ── */
+  function fixComposerBtns(){
+    var D=getDoc();
+    // Find the cmp-bar
+    var bars=D.querySelectorAll('.cmp-bar');
+    bars.forEach(function(bar){
+            // Outer row: attach + textarea + actions
+      var outerRow=bar.querySelector('[data-testid="stHorizontalBlock"]');
+      if(outerRow){
+        outerRow.style.gap='4px';
+        outerRow.style.alignItems='center';
+                // Attach column (1st) and actions column (3rd) fixed widths
+        var outerCols=outerRow.children;
+                if(outerCols[0]){ outerCols[0].style.flex='0 0 36px'; outerCols[0].style.maxWidth='36px'; outerCols[0].style.padding='0'; }
+                if(outerCols[2]){ outerCols[2].style.flex='0 0 116px'; outerCols[2].style.maxWidth='116px'; outerCols[2].style.padding='0'; }
+      }
+            // Inner actions row: quiz + mic + send
+      var allRows=bar.querySelectorAll('[data-testid="stHorizontalBlock"]');
+      allRows.forEach(function(row){
+        if(row===outerRow) return; // skip outer
+                // Do not reshape uploader internals.
+                if(row.querySelector('[data-testid="stFileUploader"]')) return;
+        row.style.gap='0';
+        row.style.alignItems='center';
+        row.style.height='36px';
+        var cols=row.querySelectorAll(':scope > [data-testid="column"]');
+        cols.forEach(function(col,idx){
+          col.style.flex='0 0 36px';
+          col.style.maxWidth='36px';
+          col.style.minWidth='0';
+          col.style.padding='0';
+          col.style.height='36px';
+          var btn=col.querySelector('button');
+          if(btn){
+            btn.style.height='36px';
+            btn.style.width='36px';
+            btn.style.minWidth='36px';
+            btn.style.maxWidth='36px';
+            btn.style.padding='0';
+            btn.style.display='flex';
+            btn.style.alignItems='center';
+            btn.style.justifyContent='center';
+            // Capsule: round outer corners only
+            var n=cols.length;
+            if(idx===0)         btn.style.borderRadius='9px 0 0 9px';
+            else if(idx===n-1)  btn.style.borderRadius='0 9px 9px 0';
+            else                btn.style.borderRadius='0';
+            if(idx>0) btn.style.borderLeft='none';
+          }
+        });
+      });
+    });
+    // Send button teal highlight
+    var sendBtn=D.querySelector('#b_send');
+    if(!sendBtn){
+      D.querySelectorAll('button').forEach(function(b){
+        if((b.getAttribute('title')||'').indexOf('Send')!==-1) sendBtn=b;
+      });
+    }
+    if(sendBtn){
+      sendBtn.style.background='linear-gradient(135deg,#0f766e,#109e93)';
+      sendBtn.style.color='#fff';
+      sendBtn.style.border='1.5px solid #0a5b56';
+      sendBtn.style.boxShadow='0 3px 10px rgba(15,118,110,.28)';
+    }
+  }
+
+    /* ── 5. Live dictation via Web Speech API ── */
+    function wireLiveDictation(){
+        // Search all accessible frames for our elements
+        function findInFrames(selector){
+            var frames=[window, window.parent, window.top];
+            for(var i=0;i<frames.length;i++){
+                try{
+                    var el=frames[i].document.querySelector(selector);
+                    if(el) return el;
+                    // Also search iframes within that frame
+                    var iframes=frames[i].document.querySelectorAll('iframe');
+                    for(var j=0;j<iframes.length;j++){
+                        try{
+                            var el2=iframes[j].contentDocument&&iframes[j].contentDocument.querySelector(selector);
+                            if(el2) return el2;
+                        }catch(_e){}
+                    }
+                }catch(_e){}
+            }
+            return null;
+        }
+
+        var recCtor=window.SpeechRecognition||window.webkitSpeechRecognition||
+                    (window.parent&&(window.parent.SpeechRecognition||window.parent.webkitSpeechRecognition));
+        
+        if(!window.__axDictation){
+            window.__axDictation={active:false,recognizer:null,baseText:'',finalText:''};
+        }
+        var S=window.__axDictation;
+
+        function getPromptBox(){
+            return findInFrames('.cmp-bar textarea[placeholder="Type your message…"]') ||
+                   findInFrames('textarea[placeholder="Type your message…"]');
+        }
+
+        function getMicBtn(){
+            return findInFrames('#ax-mic-btn');
+        }
+
+        function setMicVisual(active){
+            var btn=getMicBtn();
+            if(!btn) return;
+            if(active){
+                btn.style.background='linear-gradient(135deg,#b91c1c,#dc2626)';
+                btn.style.color='#fff';
+                btn.style.border='1.5px solid #991b1b';
+                btn.style.boxShadow='0 3px 10px rgba(185,28,28,.35)';
+            } else {
+                btn.style.background='#fff';
+                btn.style.color='';
+                btn.style.border='1px solid #c5d6d4';
+                btn.style.boxShadow='none';
+            }
+        }
+
+        function pushToPrompt(value){
+            var box=getPromptBox();
+            if(!box) return;
+            box.value=value;
+            box.dispatchEvent(new Event('input',{bubbles:true}));
+        }
+
+        function startDictation(){
+            if(!recCtor){
+                alert('Live dictation is not supported in this browser. Use Chrome or Edge.');
+                return;
+            }
+            var box=getPromptBox();
+            if(!box) return;
+
+            if(!S.recognizer){
+                S.recognizer=new recCtor();
+                S.recognizer.continuous=true;
+                S.recognizer.interimResults=true;
+                S.recognizer.lang='en-US';
+
+                S.recognizer.onresult=function(event){
+                    var interim='';
+                    for(var i=event.resultIndex;i<event.results.length;i++){
+                        var txt=(event.results[i][0]&&event.results[i][0].transcript)||'';
+                        if(event.results[i].isFinal) S.finalText+=txt+' ';
+                        else interim+=txt;
+                    }
+                    pushToPrompt((S.baseText+S.finalText+interim).trim());
+                };
+
+                S.recognizer.onend=function(){
+                    if(S.active){
+                        try{ S.recognizer.start(); }catch(_e){}
+                    }
+                };
+
+                S.recognizer.onerror=function(event){
+                    console.log('Speech recognition error:', event.error);
+                    if(S.active){
+                        S.active=false;
+                        setMicVisual(false);
+                    }
+                };
+            }
+
+            S.baseText=((box.value||'').trim() ? (box.value||'').trim()+' ' : '');
+            S.finalText='';
+            S.active=true;
+            setMicVisual(true);
+            try{ S.recognizer.start(); }catch(_e){ console.log('Failed to start:', _e); }
+        }
+
+        function stopDictation(){
+            S.active=false;
+            setMicVisual(false);
+            if(S.recognizer){
+                try{ S.recognizer.stop(); }catch(_e){}
+            }
+        }
+
+        function toggleDictation(){
+            if(S.active) stopDictation();
+            else startDictation();
+        }
+
+        // Event delegation: bind at document level across frames (survives rerenders)
+        if(!window.__axDictationDelegated){
+            var frames=[window, window.parent, window.top];
+            for(var fi=0;fi<frames.length;fi++){
+                try{
+                    frames[fi].document.addEventListener('click', function(ev){
+                        var btn=ev.target;
+                        if(btn && btn.id==='ax-mic-btn'){
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            toggleDictation();
+                        }
+                    }, true);
+                }catch(_e){}
+            }
+            window.__axDictationDelegated=true;
+        }
+
+        setMicVisual(!!S.active);
+    }
+
+  /* Run everything together */
+    function runAll(){
+        fixCards();
+        fixNewChat();
+        fixComposerBtns();
+        fixChatGaps();
+    }
+
+  // Run immediately, then at intervals to catch rerenders
+  runAll();
+  setTimeout(runAll, 150);
+  setTimeout(runAll, 400);
+  setTimeout(runAll, 900);
+  setTimeout(runAll, 2000);
+  // Keep running every 500ms to handle Streamlit rerenders
+  setInterval(runAll, 500);
+
+    /* ── 6. Receive live dictation transcript from mic component iframe ── */
+    if(!window.__axMsgListener){
+        window.__axMsgListener=true;
+        var _micBase='';
+
+        function _findPromptBox(){
+            var sels=[
+                'textarea[placeholder="Type your message\u2026"]',
+                'textarea[placeholder="Type your message..."]',
+                '.cmp-bar textarea'
+            ];
+            var roots=[window, window.parent, window.top];
+            for(var i=0;i<roots.length;i++){
+                try{
+                    var doc=roots[i].document;
+                    for(var s=0;s<sels.length;s++){
+                        var hit=doc.querySelector(sels[s]);
+                        if(hit) return hit;
+                    }
+                    var ifrs=doc.querySelectorAll('iframe');
+                    for(var j=0;j<ifrs.length;j++){
+                        try{
+                            var idoc=ifrs[j].contentDocument;
+                            if(!idoc) continue;
+                            for(var k=0;k<sels.length;k++){
+                                var ih=idoc.querySelector(sels[k]);
+                                if(ih) return ih;
+                            }
+                        }catch(_e){}
+                    }
+                }catch(_e){}
+            }
+            return null;
+        }
+
+        function _onDictationMessage(ev){
+            if(!ev.data) return;
+            if(ev.data.type==='ax-dictation-start'){
+                var box0=_findPromptBox();
+                _micBase=box0 ? ((box0.value||'').trim() ? box0.value.trim()+' ' : '') : '';
+                return;
+            }
+            if(ev.data.type==='ax-dictation'){
+                var box=_findPromptBox();
+                if(!box) return;
+                var nv=(_micBase+(ev.data.text||'')).trim();
+                var win=(box.ownerDocument && box.ownerDocument.defaultView) || window;
+                var nativeSetter=Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype,'value').set;
+                nativeSetter.call(box, nv);
+                box.dispatchEvent(new Event('input',{bubbles:true}));
+            }
+        }
+
+        var _wins=[window, window.parent, window.top];
+        for(var wi=0;wi<_wins.length;wi++){
+            try{ _wins[wi].addEventListener('message', _onDictationMessage); }catch(_e){}
+        }
+    }
+
+})();
+</script>""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RENDER HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+def _parse_topics(text):
+    H="Topics You Can Ask About:"
+    idx=text.find(H)
+    if idx==-1: return text,[],""
+    before=text[:idx].rstrip(); rest=text[idx+len(H):]
+    topics,after,inn=[],[],True
     for ln in rest.split("\n"):
-        stripped = ln.strip()
-        if not stripped:
-            continue
-        if stripped == "Would you like to know more about any of these topics?":
-            in_topics = False
-            continue
-        if in_topics and stripped.startswith("- "):
-            topics.append(stripped[2:].strip())
-        else:
-            in_topics = False
-            after_lines.append(stripped)
-    return before, topics, "\n".join(after_lines)
+        s=ln.strip()
+        if not s: continue
+        if s=="Would you like to know more about any of these topics?": inn=False; continue
+        if inn and s.startswith("- "): topics.append(s[2:].strip())
+        else: inn=False; after.append(s)
+    return before,topics,"\n".join(after)
 
-
-def _esc(text: str) -> str:
-    """Minimal HTML escaping for raw text inside HTML blocks."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def render_message(msg, msg_idx):
-    """Render one chat message with React-matching bubble styles."""
-    if msg["role"] == "user":
-        st.markdown(
-            f'<div class="msg-user-wrap">'
-            f'<div class="msg-user-inner">'
-            f'<div class="msg-who-user">You</div>'
-            f'{_esc(msg["text"])}'
-            f'</div></div>',
-            unsafe_allow_html=True,
-        )
-        return
-
-    # assistant — error
+def render_msg(msg,idx):
+    if msg["role"]=="user":
+        st.markdown(f'<div class="mu"><div class="mu-i"><div class="mu-w">You</div>{_esc(msg.get("text",""))}</div></div>',unsafe_allow_html=True); return
     if msg.get("error"):
-        st.markdown(
-            f'<div class="msg-error">⚠ {_esc(msg["error"])}</div>',
-            unsafe_allow_html=True,
-        )
-        return
-
-    sections = msg.get("sections")
-    raw_text = msg.get("text", "")
-
-    # assistant — structured sections
-    if sections:
-        blocks = ['<div class="msg-who-asst">Assistant</div>']
-        if sections.get("Feedback"):
-            blocks.append(
-                f'<div class="sec-block sec-feedback">'
-                f'<div class="sec-title sec-title-feedback">Feedback</div>'
-                f'{_esc(sections["Feedback"])}'
-                f'</div>'
-            )
+        st.markdown(f'<div class="ma"><div class="merr">⚠&nbsp;{_esc(msg["error"])}</div></div>',unsafe_allow_html=True); return
+    secs=msg.get("sections"); raw=msg.get("text","")
+    if secs:
+        B=['<div class="ma-w">Assistant</div>']
+        if secs.get("Feedback"):
+            B.append(f'<div class="sb sb-f"><span class="st2 st-f">Feedback</span>{_esc(secs["Feedback"])}</div>')
         else:
-            if sections.get("Explanation"):
-                blocks.append(
-                    f'<div class="sec-block sec-explanation">'
-                    f'<div class="sec-title sec-title-explanation">Explanation</div>'
-                    f'{_esc(sections["Explanation"])}'
-                    f'</div>'
-                )
-            if sections.get("Example"):
-                blocks.append(
-                    f'<div class="sec-block sec-example">'
-                    f'<div class="sec-title sec-title-example">Example</div>'
-                    f'{_esc(sections["Example"])}'
-                    f'</div>'
-                )
-            if sections.get("Question"):
-                blocks.append(
-                    f'<div class="sec-block sec-question">'
-                    f'<div class="sec-title sec-title-question">Question to Think About</div>'
-                    f'{_esc(sections["Question"])}'
-                    f'</div>'
-                )
-        if len(blocks) > 1:
-            inner = "".join(blocks)
-            st.markdown(
-                f'<div class="msg-assistant-wrap"><div class="msg-assistant-inner">{inner}</div></div>',
-                unsafe_allow_html=True,
-            )
+            if secs.get("Explanation"): B.append(f'<div class="sb sb-e"><span class="st2 st-e">Explanation</span>{_esc(secs["Explanation"])}</div>')
+            if secs.get("Example"):     B.append(f'<div class="sb sb-ex"><span class="st2 st-ex">Example</span>{_esc(secs["Example"])}</div>')
+            if secs.get("Question"):    B.append(f'<div class="sb sb-q"><span class="st2 st-q">Question to Think About</span>{_esc(secs["Question"])}</div>')
+        if len(B)>1: st.markdown(f'<div class="ma"><div class="ma-i">{"".join(B)}</div></div>',unsafe_allow_html=True)
+        if msg.get("audio_path"):
+            _render_audio_if_available(msg.get("audio_path"))
         return
-
-    # assistant — raw text, possibly with topic pills
-    if raw_text:
-        if "Topics You Can Ask About:" in raw_text:
-            before, topics, after = _parse_summary_topics(raw_text)
-            st.markdown(
-                f'<div class="msg-assistant-wrap"><div class="msg-assistant-inner">'
-                f'<div class="msg-who-asst">Assistant</div>'
-                f'<pre style="white-space:pre-wrap;font-family:inherit;margin:0;color:#1f3746">{_esc(before)}</pre>'
-                f'</div></div>',
-                unsafe_allow_html=True,
-            )
-            if topics:
-                st.markdown(
-                    '<div class="summary-topic-box"><strong>Topics You Can Ask About:</strong>',
-                    unsafe_allow_html=True,
-                )
-                pill_cols = st.columns(min(len(topics), 4))
-                for i, t in enumerate(topics):
-                    with pill_cols[i % len(pill_cols)]:
-                        if st.button(t, key=f"pill_{msg_idx}_{i}", use_container_width=True):
-                            st.session_state._force_fresh = True
-                            handle_send(t)
-                            st.rerun()
-                st.markdown(
-                    '<p class="summary-topic-prompt">Click a topic or type your own question below.</p></div>',
-                    unsafe_allow_html=True,
-                )
-            if after:
-                st.markdown(
-                    f'<div class="msg-assistant-wrap"><div class="msg-assistant-inner">'
-                    f'<div class="sec-block sec-explanation">{_esc(after)}</div>'
-                    f'</div></div>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.markdown(
-                f'<div class="msg-assistant-wrap"><div class="msg-assistant-inner">'
-                f'<div class="msg-who-asst">Assistant</div>'
-                f'{_esc(raw_text)}'
-                f'</div></div>',
-                unsafe_allow_html=True,
-            )
-
+    if not raw: return
+    if "Topics You Can Ask About:" in raw:
+        before,topics,after=_parse_topics(raw)
+        st.markdown(f'<div class="ma"><div class="ma-i"><div class="ma-w">Assistant</div><pre style="white-space:pre-wrap;font-family:\'Manrope\',sans-serif;margin:0;color:#1f3746;font-size:.9rem">{_esc_pre(before)}</pre></div></div>',unsafe_allow_html=True)
+        if topics:
+            st.markdown('<div class="tbox"><strong>Topics You Can Ask About:</strong>',unsafe_allow_html=True)
+            st.markdown('<div class="pill-row">',unsafe_allow_html=True)
+            pc=st.columns(min(len(topics),4))
+            for i,t in enumerate(topics):
+                with pc[i%len(pc)]:
+                    if st.button(t,key=f"pill_{idx}_{i}",use_container_width=True): _queue_send(t,force_fresh=True); st.rerun()
+            st.markdown('</div><p>Click a topic or type your own question below.</p></div>',unsafe_allow_html=True)
+        if after: st.markdown(f'<div class="ma"><div class="ma-i"><div class="sb sb-e">{_esc(after)}</div></div></div>',unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="ma"><div class="ma-i"><div class="ma-w">Assistant</div><div style="white-space:pre-wrap;line-height:1.55;font-size:.9rem">{_esc(raw)}</div></div></div>',unsafe_allow_html=True)
+        if msg.get("audio_path"):
+            _render_audio_if_available(msg.get("audio_path"))
 
 def render_quiz_setup(chat):
-    st.subheader("Quiz Setup")
-    docs = chat.get("docs") or (
-        [{"doc_id": chat["doc_id"], "filename": "Uploaded document"}] if chat.get("doc_id") else []
-    )
-    is_doc_chat = bool(docs)
-
-    if is_doc_chat:
-        st.caption("Questions will be generated from the uploaded document.")
-        if len(docs) > 1:
-            doc_names = {d["doc_id"]: d["filename"] for d in docs}
-            chat["quiz_doc_id"] = st.selectbox(
-                "Select document", list(doc_names.keys()),
-                format_func=lambda k: doc_names[k],
-                key="quiz_doc_sel",
-            )
-        st.text_input("Focus area (optional)", key="_qt_input",
-                      value=chat.get("quiz_topic", ""),
-                      on_change=lambda: chat.update({"quiz_topic": st.session_state._qt_input}))
+    docs=chat.get("docs") or ([{"doc_id":chat["doc_id"],"filename":"Uploaded document"}] if chat.get("doc_id") else [])
+    is_doc=bool(docs)
+    st.markdown('<h2 style="margin:0 0 12px;font-size:1rem;font-weight:700;color:#0f1722">📝 Quiz Setup</h2>',unsafe_allow_html=True)
+    if is_doc:
+        st.caption("Questions from uploaded document.")
+        qt=st.text_input("Focus area (optional)",value=chat.get("quiz_topic",""),key="qs_topic")
     else:
-        st.text_input("Quiz topic", key="_qt_input",
-                      value=chat.get("quiz_topic", ""),
-                      on_change=lambda: chat.update({"quiz_topic": st.session_state._qt_input}))
-        # Also sync immediately for button click
-        chat["quiz_topic"] = st.session_state.get("_qt_input", chat.get("quiz_topic", ""))
-
-    st.selectbox("Difficulty", ["easy", "medium", "hard"],
-                 index=["easy", "medium", "hard"].index(st.session_state.quiz_difficulty),
-                 key="quiz_diff_sel",
-                 on_change=lambda: st.session_state.update({"quiz_difficulty": st.session_state.quiz_diff_sel}))
-
-    can_gen = is_doc_chat or bool((chat.get("quiz_topic") or "").strip())
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Generate Quiz", type="primary", disabled=not can_gen, key="btn_gen_quiz"):
-            chat["quiz_topic"] = st.session_state.get("_qt_input", chat.get("quiz_topic", ""))
-            st.session_state.quiz_difficulty = st.session_state.get("quiz_diff_sel", st.session_state.quiz_difficulty)
-            handle_generate_quiz(chat)
-            st.rerun()
-    with col2:
-        if st.button("Cancel", key="btn_cancel_quiz"):
-            chat["show_quiz_setup"] = False
-            st.rerun()
-
+        qt=st.text_input("Quiz Topic *",value=chat.get("quiz_topic",""),placeholder="e.g. photosynthesis, planets",key="qs_topic")
+        st.caption(f"Chat: {chat.get('topic','')}")
+    chat["quiz_topic"]=qt or ""
+    di=st.select_slider("Difficulty",["easy","medium","hard"],value=st.session_state.quiz_difficulty,key="qs_diff")
+    st.session_state.quiz_difficulty=di
+    bc={"easy":("#d1fae5","#065f46"),"medium":("#fef3c7","#92400e"),"hard":("#fee2e2","#991b1b")}
+    bg,fg=bc[di]
+    st.markdown(f'<span style="display:inline-block;padding:3px 12px;border-radius:999px;font-size:.76rem;font-weight:700;background:{bg};color:{fg}">{di}</span>',unsafe_allow_html=True)
+    st.slider("Age",5,35,value=st.session_state.age,key="qs_age")
+    st.session_state.age=st.session_state.qs_age
+    st.selectbox("Profession",PROFESSION_OPTIONS,index=PROFESSION_OPTIONS.index(st.session_state.profession) if st.session_state.profession in PROFESSION_OPTIONS else 0,key="qs_profession")
+    st.session_state.profession=st.session_state.qs_profession
+    st.selectbox("Expertise",["Beginner","Intermediate","Advanced"],index=["Beginner","Intermediate","Advanced"].index(st.session_state.expertise_level) if st.session_state.expertise_level in ["Beginner","Intermediate","Advanced"] else 0,key="qs_expertise")
+    st.session_state.expertise_level=st.session_state.qs_expertise
+    st.selectbox("Example Context",AREA_OPTIONS,index=AREA_OPTIONS.index(st.session_state.area_of_interest) if st.session_state.area_of_interest in AREA_OPTIONS else 0,key="qs_area")
+    can=is_doc or bool((chat.get("quiz_topic") or "").strip())
+    c1,c2=st.columns(2)
+    with c1:
+        st.markdown('<div class="q-secondary">',unsafe_allow_html=True)
+        if st.button("Cancel",key="qs_cancel",use_container_width=True): chat["show_quiz_setup"]=False; st.rerun()
+        st.markdown('</div>',unsafe_allow_html=True)
+    with c2:
+        st.markdown('<div class="q-primary">',unsafe_allow_html=True)
+        if st.button("Generate Quiz (5 questions)",key="qs_gen",disabled=not can,use_container_width=True): do_quiz(chat); st.rerun()
+        st.markdown('</div>',unsafe_allow_html=True)
 
 def render_quiz(chat):
-    qs = chat["quiz_state"]
-
-    # ── Results screen ──
+    qs=chat["quiz_state"]
     if qs.get("completed"):
-        total = len(qs["questions"])
-        pct = round(qs["score"] / total * 100) if total else 0
-        st.markdown(
-            f'<div class="quiz-score-card">{qs["score"]}/{total}'
-            f'<div class="quiz-score-pct">{pct}% correct</div></div>',
-            unsafe_allow_html=True,
-        )
-        st.subheader("Review")
-        for i, ans in enumerate(qs["answers"]):
-            card_cls = "review-card review-card-correct" if ans["isCorrect"] else "review-card review-card-incorrect"
-            icon = "✓" if ans["isCorrect"] else "✗"
-            exp_text = f"<br><span style='color:#315060;font-size:.88rem'>{_esc(ans.get('explanation',''))}</span>" if ans.get("explanation") else ""
-            ca = f"<br><strong style='color:#991b1b'>Correct: {_esc(ans['correctAnswer'])}</strong>" if not ans["isCorrect"] else ""
-            st.markdown(
-                f'<div class="{card_cls}"><strong>Q{i+1}: {_esc(ans["question"])}</strong><br>'
-                f'Your answer: <strong>{_esc(ans["userAnswer"])}</strong> {icon}{ca}{exp_text}</div>',
-                unsafe_allow_html=True,
-            )
-        c1, c2 = st.columns(2)
+        tot=len(qs["questions"]); pct=round(qs["score"]/tot*100) if tot else 0
+        st.markdown(f'<div class="qscore">{qs["score"]}/{tot}<div class="qpct">{pct}%</div></div>',unsafe_allow_html=True)
+        st.markdown('<h3 style="color:#1f3746;margin:0 0 6px;font-size:.9rem">Review</h3>',unsafe_allow_html=True)
+        for i,a in enumerate(qs["answers"]):
+            cls="rev rev-ok" if a["isCorrect"] else "rev rev-no"; icon="✓" if a["isCorrect"] else "✗"
+            ca=f'<br><strong style="color:#991b1b">Correct: {_esc(a["correctAnswer"])}</strong>' if not a["isCorrect"] else ""
+            cx=f'<br><span class="qctx"><strong>Context:</strong> {_esc(a.get("context",""))}</span>' if a.get("context") else ""
+            ex=f'<br><span style="color:#315060;font-size:.86rem">{_esc(a.get("explanation",""))}</span>' if a.get("explanation") else ""
+            st.markdown(f'<div class="{cls}"><strong>Q{i+1}:</strong> {_esc(a["question"])}<br>Your answer: <strong>{_esc(a["userAnswer"])}</strong> {icon}{ca}{cx}{ex}</div>',unsafe_allow_html=True)
+        c1,c2=st.columns(2)
         with c1:
-            if st.button("Try Again", type="primary", key="quiz_retry"):
-                chat["show_quiz_setup"] = True
-                chat["quiz_state"] = None
-                st.rerun()
+            st.markdown('<div class="q-primary">',unsafe_allow_html=True)
+            if st.button("Try Again",key="qr_retry",use_container_width=True): chat["show_quiz_setup"]=True; chat["quiz_state"]=None; st.rerun()
+            st.markdown('</div>',unsafe_allow_html=True)
         with c2:
-            if st.button("Back to Explain", key="quiz_back"):
-                chat["quiz_state"] = None
-                chat["show_quiz_setup"] = False
-                st.rerun()
+            st.markdown('<div class="q-secondary">',unsafe_allow_html=True)
+            if st.button("Back to Explain",key="qr_back",use_container_width=True): chat["quiz_state"]=None; chat["show_quiz_setup"]=False; st.rerun()
+            st.markdown('</div>',unsafe_allow_html=True)
         return
-
-    # ── Active question ──
-    q = qs["questions"][qs["current_index"]]
-    total = len(qs["questions"])
-    pct_fill = round((qs["current_index"]) / total * 100)
-    answered = len(qs["answers"])
-
-    # Header card
-    st.markdown(
-        f'<div style="background:#fff;border:1px solid #d7e7e5;border-radius:12px;'
-        f'padding:16px 18px;box-shadow:0 3px 14px rgba(20,58,80,.06);margin-bottom:14px">'
-        f'<h2 style="margin:0 0 10px;color:#1f3746;font-size:1.1rem">Quiz: {_esc(qs["topic"])}</h2>'
-        f'<div style="display:flex;align-items:center;justify-content:space-between;'
-        f'color:#5a6e7b;font-size:.84rem;font-weight:600;margin-bottom:8px">'
-        f'<span>Question {qs["current_index"] + 1} of {total}</span>'
-        f'<span style="border:1px solid #b7ddd8;border-radius:999px;padding:3px 9px;'
-        f'background:#f2fbf8;color:#21665d">Score: {qs["score"]}/{answered if answered else "–"}</span>'
-        f'</div>'
-        f'<div class="quiz-bar-wrap"><div class="quiz-bar-fill" style="width:{pct_fill}%"></div></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Question card
-    st.markdown(
-        f'<div style="background:#fff;border:1px solid #d7e7e5;border-radius:12px;'
-        f'padding:18px;box-shadow:0 3px 14px rgba(20,58,80,.06)">'
-        f'<p style="font-size:.76rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;'
-        f'color:#5f7482;margin:0 0 6px">Question</p>'
-        f'<h3 style="font-size:1.1rem;font-weight:700;line-height:1.45;margin:0 0 18px;color:#1f3746">'
-        f'{_esc(q["question"])}'
-        f'</h3>',
-        unsafe_allow_html=True,
-    )
-
+    q=qs["questions"][qs["current_index"]]; tot=len(qs["questions"])
+    qctx=(q.get("example_context") or q.get("context") or q.get("area_of_interest") or "").strip()
+    pct=round(qs["current_index"]/tot*100); ac=len(qs["answers"])
+    st.markdown(f'<div style="background:#fff;border:1px solid #d7e7e5;border-radius:12px;padding:10px 12px;margin-bottom:8px;box-shadow:0 2px 10px rgba(20,58,80,.06)"><h2 style="margin:0 0 5px;color:#1f3746;font-size:.92rem;font-weight:700">Quiz: {_esc(qs["topic"])}</h2><div style="display:flex;align-items:center;justify-content:space-between;color:#5a6e7b;font-size:.76rem;font-weight:600;margin-bottom:4px"><span>Q {qs["current_index"]+1}/{tot}</span><span style="border:1px solid #b7ddd8;border-radius:999px;padding:1px 7px;background:#f2fbf8;color:#21665d">Score: {qs["score"]}/{ac if ac else "–"}</span></div><div class="qbar"><div class="qfill" style="width:{pct}%"></div></div></div>',unsafe_allow_html=True)
+    st.markdown(f'<div style="background:#fff;border:1px solid #d7e7e5;border-radius:12px;padding:12px;box-shadow:0 2px 10px rgba(20,58,80,.06)"><p style="font-size:.66rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#5f7482;margin:0 0 4px">Choose one answer</p><h3 style="font-size:.9rem;font-weight:700;line-height:1.35;margin:0 0 8px;color:#1f3746">{_esc(q["question"])}</h3>',unsafe_allow_html=True)
+    if qctx:
+        st.markdown(f'<div class="qctx"><strong>Context:</strong> {_esc(qctx)}</div>',unsafe_allow_html=True)
     if not qs["showing_feedback"]:
-        for key, val in q["options"].items():
-            if st.button(
-                f"{key})  {val}",
-                key=f"opt_{qs['current_index']}_{key}",
-                use_container_width=True,
-            ):
-                is_correct = key == q["correct"]
-                qs["answers"].append({
-                    "question": q["question"],
-                    "userAnswer": key,
-                    "correctAnswer": q["correct"],
-                    "isCorrect": is_correct,
-                    "explanation": q.get("explanation", ""),
-                })
-                qs["score"] += 1 if is_correct else 0
-                qs["showing_feedback"] = True
-                qs["current_is_correct"] = is_correct
-                st.rerun()
+        for k,v in q["options"].items():
+            if st.button(f"{k})  {v}",key=f"qo_{qs['current_index']}_{k}",use_container_width=True):
+                ic=(k==q["correct"]); qs["answers"].append({"question":q["question"],"userAnswer":k,"correctAnswer":q["correct"],"isCorrect":ic,"explanation":q.get("explanation",""),"context":qctx})
+                qs["score"]+=1 if ic else 0; qs["showing_feedback"]=True; qs["current_is_correct"]=ic; st.rerun()
     else:
-        last_answer = qs["answers"][-1]["userAnswer"] if qs["answers"] else None
-        for key, val in q["options"].items():
-            is_right = key == q["correct"]
-            was_picked = key == last_answer
-            if is_right:
-                extra = "quiz-opt-correct"
-            elif was_picked:
-                extra = "quiz-opt-incorrect"
-            else:
-                extra = ""
-            key_cls = ("quiz-opt-key " + extra).strip()
-            st.markdown(
-                f'<div class="quiz-opt {extra}">'
-                f'<span class="{key_cls}">{key}</span>'
-                f'<span class="quiz-opt-text">{_esc(val)}</span></div>',
-                unsafe_allow_html=True,
-            )
-
-        if qs["current_is_correct"]:
-            st.markdown(
-                '<div class="quiz-feedback-correct">✓ Correct!</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f'<div class="quiz-feedback-incorrect">✗ Not quite! '
-                f'Correct answer: <strong>{_esc(q["correct"])}</strong></div>',
-                unsafe_allow_html=True,
-            )
-        if q.get("explanation"):
-            st.caption(q["explanation"])
-
-        btn_label = "Next Question →" if qs["current_index"] < total - 1 else "View Results"
-        if st.button(btn_label, type="primary", key="quiz_next"):
-            if qs["current_index"] < total - 1:
-                qs["current_index"] += 1
-                qs["showing_feedback"] = False
-                qs["current_is_correct"] = None
-            else:
-                qs["completed"] = True
+        la=qs["answers"][-1]["userAnswer"] if qs["answers"] else None
+        for k,v in q["options"].items():
+            ir=k==q["correct"]; wp=k==la; cls="qc" if ir else ("qi" if wp else "")
+            st.markdown(f'<div class="qopt {cls}"><span class="qopt-key">{k}</span><span>{_esc(v)}</span></div>',unsafe_allow_html=True)
+        fbc="qfb-ok" if qs["current_is_correct"] else "qfb-no"
+        fbt="✓ Correct!" if qs["current_is_correct"] else f'✗ Not quite! Correct: <strong>{_esc(q["correct"])}</strong>'
+        exp=f'<p style="margin:6px 0 0">{_esc(q.get("explanation",""))}</p>' if q.get("explanation") else ""
+        st.markdown(f'<div class="{fbc}">{fbt}{exp}</div>',unsafe_allow_html=True)
+        lbl="Next Question →" if qs["current_index"]<tot-1 else "View Results"
+        st.markdown('<div class="q-primary">',unsafe_allow_html=True)
+        if st.button(lbl,key="q_next",use_container_width=True):
+            if qs["current_index"]<tot-1: qs["current_index"]+=1; qs["showing_feedback"]=False; qs["current_is_correct"]=None
+            else: qs["completed"]=True
             st.rerun()
+        st.markdown('</div>',unsafe_allow_html=True)
+    st.markdown('</div>',unsafe_allow_html=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-
-def render_sidebar():
-    """Left sidebar — chat history & file upload only."""
-    with st.sidebar:
-        st.markdown("## 🧠 AgeXplain")
-
-        # ── New chat ──
-        if st.button("＋ New Chat", use_container_width=True, key="btn_new_chat"):
-            st.session_state.active_chat_id = None
-            st.session_state.last_question = ""
-            st.rerun()
-
-        # ── Chat history ──
-        st.markdown("### Chats")
+def render_left():
+    if st.button("＋  Start New Chat",use_container_width=True,key="btn_new"):
+        st.session_state.active_chat_id=None; st.session_state.last_question=""; st.rerun()
+    hL,hR=st.columns([3,2.4],gap="small")
+    with hL: st.markdown('<p style="font-size:.68rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#6b7d8c;margin:8px 0 5px">Chats</p>',unsafe_allow_html=True)
+    with hR:
         if st.session_state.chats:
-            if st.button("Clear All", key="btn_clear_all"):
-                st.session_state.chats = []
-                st.session_state.active_chat_id = None
+            if st.button("Clear All",key="btn_clear",use_container_width=False): st.session_state.chats=[]; st.session_state.active_chat_id=None; st.rerun()
+    if not st.session_state.chats:
+        st.markdown('<p style="font-size:13px;color:#7a8d99;margin:3px 0">No chat history yet.</p>',unsafe_allow_html=True)
+    for c in st.session_state.chats:
+        active=c["id"]==st.session_state.active_chat_id
+        cL,cR=st.columns([6,1],gap="small")
+        with cL:
+            label=("► " if active else "")+c["topic"][:38]
+            if st.button(label,key=f"c_{c['id']}",use_container_width=True): st.session_state.active_chat_id=c["id"]; st.rerun()
+        with cR:
+            if st.button("×",key=f"d_{c['id']}"):
+                st.session_state.chats=[x for x in st.session_state.chats if x["id"]!=c["id"]]
+                if st.session_state.active_chat_id==c["id"]: st.session_state.active_chat_id=None
                 st.rerun()
 
-        if not st.session_state.chats:
-            st.markdown('<p style="font-size:13px;color:#7a8d99;margin:4px 0">No chats yet.</p>', unsafe_allow_html=True)
-
-        for c in st.session_state.chats:
-            is_active = c["id"] == st.session_state.active_chat_id
-            label = ("▶ " if is_active else "") + c["topic"][:36]
-            col_chat, col_del = st.columns([6, 1])
-            with col_chat:
-                if st.button(label, key=f"chat_{c['id']}", use_container_width=True):
-                    st.session_state.active_chat_id = c["id"]
-                    st.rerun()
-            with col_del:
-                if st.button("✕", key=f"del_{c['id']}"):
-                    st.session_state.chats = [x for x in st.session_state.chats if x["id"] != c["id"]]
-                    if st.session_state.active_chat_id == c["id"]:
-                        st.session_state.active_chat_id = None
-                    st.rerun()
-
-        # ── File upload ──
-        st.divider()
-        st.markdown("### Upload Document")
-        uploaded = st.file_uploader(
-            "PDF / DOCX / TXT / MD",
-            type=["pdf", "docx", "txt", "md", "csv", "html"],
-            key="sidebar_uploader",
-            label_visibility="visible",
-        )
-        if uploaded:
-            handle_upload(uploaded)
-            st.rerun()
-
-
-def render_right_panel():
-    """Right settings panel — rendered as a Streamlit column."""
-    st.markdown(
-        '<div class="right-panel">',
-        unsafe_allow_html=True,
-    )
-
-    # ── Model ──
-    st.markdown('<h4 style="font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:#6b7d8c;margin:0 0 6px;font-weight:700">Model</h4>', unsafe_allow_html=True)
-    st.selectbox("Provider", PROVIDER_OPTIONS,
-                 index=PROVIDER_OPTIONS.index(st.session_state.model_provider),
-                 key="model_provider",
-                 label_visibility="collapsed")
-    if st.session_state.model_provider != "local":
-        st.text_input("API Key", type="password", key="model_api_key",
-                      placeholder="API Key…", label_visibility="collapsed")
-
-    if st.button("Test Connection", key="btn_validate", use_container_width=True):
-        ok, msg = call_validate_model()
-        st.session_state.model_validation_result = {"ok": ok, "message": msg}
+def render_right():
+    first=[True]
+    def H(t):
+        mt="0" if first[0] else "6px"; first[0]=False
+        st.markdown(f'<p style="font-size:.64rem;font-weight:700;letter-spacing:.10em;text-transform:uppercase;color:#6b7d8c;margin:{mt} 0 2px;line-height:1">{t}</p>',unsafe_allow_html=True)
+    H("Model")
+    if st.session_state.get("_model_provider_selected") not in PROVIDERS:
+        st.session_state._model_provider_selected=PROVIDERS[0]
+    if st.session_state.get("model_provider_widget") not in PROVIDERS:
+        st.session_state.model_provider_widget=st.session_state._model_provider_selected
+    st.selectbox("Provider",PROVIDERS,format_func=lambda p:PLABELS.get(p,p),key="model_provider_widget",
+        label_visibility="collapsed")
+    sel=st.session_state.model_provider_widget
+    if sel!=st.session_state._model_provider_selected:
+        # Persist current provider key before switching.
+        prev = st.session_state._model_provider_selected
+        byp = st.session_state.get("_api_keys_by_provider") or {}
+        prev_key = (st.session_state.get("model_api_key") or "").strip()
+        if prev in PROVIDERS and prev_key:
+            byp[prev] = prev_key
+        st.session_state._model_provider_selected=sel
+        st.session_state.model_provider=sel
+        # Restore selected provider key (if any).
+        st.session_state.model_api_key=(byp.get(sel) or "").strip()
+        st.session_state._api_keys_by_provider=byp
+        st.session_state.model_validation_result=None
+    else:
+        st.session_state.model_provider=st.session_state._model_provider_selected
+    p=(st.session_state.get("model_provider") or "").lower()
+    if p and p!="local":
+        byp = st.session_state.get("_api_keys_by_provider") or {}
+        if not (st.session_state.get("model_api_key") or "").strip() and (byp.get(p) or "").strip():
+            st.session_state.model_api_key = (byp.get(p) or "").strip()
+        st.text_input("API Key",type="password",key="model_api_key",placeholder="Enter API key",label_visibility="collapsed")
+        # Keep a per-provider copy so token survives reruns/topic clicks.
+        byp = st.session_state.get("_api_keys_by_provider") or {}
+        cur_key = (st.session_state.get("model_api_key") or "").strip()
+        if cur_key:
+            byp[p] = cur_key
+            st.session_state._api_keys_by_provider = byp
+    elif p=="local": st.markdown('<p style="font-size:.74rem;color:#6b7280;margin:0 0 2px;font-style:italic">Local — no key needed.</p>',unsafe_allow_html=True)
+    if st.button("Test Model Connection",key="btn_val",use_container_width=True):
+        with st.spinner("Testing connection…"):
+            ok,msg=call_validate()
+        st.session_state.model_validation_result={"ok":ok,"message":msg}
     if st.session_state.model_validation_result:
-        r = st.session_state.model_validation_result
-        css = "val-ok" if r["ok"] else "val-err"
-        st.markdown(f'<p class="{css}">{_esc(r["message"])}</p>', unsafe_allow_html=True)
+        r=st.session_state.model_validation_result
+        st.markdown(f'<p class="{"val-ok" if r["ok"] else "val-err"}">{_esc(r["message"])}</p>',unsafe_allow_html=True)
+    H("Difficulty"); st.slider("Age",5,35,key="age",label_visibility="visible")
+    H("Profile")
+    st.selectbox("Profession",PROFESSION_OPTIONS,key="profession",label_visibility="visible")
+    st.selectbox("Expertise Level",["Beginner","Intermediate","Advanced"],key="expertise_level",label_visibility="visible")
+    st.selectbox("Example Context",AREA_OPTIONS,key="area_of_interest",label_visibility="visible")
+    st.markdown('<p style="font-size:.70rem;color:#6b7d8c;margin:0 0 3px;font-style:italic">Examples only; topic facts unchanged.</p>',unsafe_allow_html=True)
+    H("Output")
+    c1,c2=st.columns(2,gap="small")
+    with c1: st.checkbox("Include examples",key="include_examples")
+    with c2: st.checkbox("Include questions",key="include_questions")
+    H("Topic Packs")
+    packs=["— choose a pack —"]+sorted(TOPICS_DATA.keys())
+    st.selectbox("Pack",packs,key="selected_pack",label_visibility="collapsed")
+    if st.session_state.selected_pack and st.session_state.selected_pack != "— choose a pack —":
+        if st.session_state._last_selected_pack != st.session_state.selected_pack:
+            st.session_state._last_selected_pack = st.session_state.selected_pack
+            st.session_state._last_pack_topic = ""
+            st.session_state._pending_pack_topic = ""
+        topics=TOPICS_DATA[st.session_state.selected_pack]
+        use_button_fallback = pills is None
+        if pills is not None:
+            try:
+                chosen = pills("Subtopics", topics, index=None, clearable=True)
+            except TypeError:
+                # Older streamlit-pills may select first option by default; use fallback selectbox instead.
+                chosen = None
+                use_button_fallback = True
+            except Exception:
+                chosen = None
+                use_button_fallback = True
+            if chosen:
+                if chosen != st.session_state._last_pack_topic:
+                    st.session_state._pending_pack_topic = chosen
+                    st.session_state._last_pack_topic = chosen
+                    paste_to_prompt(chosen)
+                    st.rerun()
+        if use_button_fallback:
+            t_opts=["— select subtopic —"]+topics
+            chosen_fb=st.selectbox("Subtopic",t_opts,key=f"subtopic_{st.session_state.selected_pack}",label_visibility="collapsed")
+            if chosen_fb and chosen_fb != "— select subtopic —":
+                if chosen_fb != st.session_state._last_pack_topic:
+                    st.session_state._pending_pack_topic = chosen_fb
+                    st.session_state._last_pack_topic = chosen_fb
+                    paste_to_prompt(chosen_fb)
+                    st.rerun()
+            elif chosen_fb == "— select subtopic —":
+                st.session_state._pending_pack_topic = ""
+                st.session_state._last_pack_topic = ""
 
-    st.divider()
+def render_center(chat):
+    if not st.session_state.get("_db_ready"):
+        with st.spinner("Initializing backend services... please wait"):
+            try:
+                _ensure_db()
+            except Exception as ex:
+                st.error(f"Backend initialization failed: {ex}")
+                return
+        st.caption("Backend initialized. You can start typing now.")
 
-    # ── Difficulty / Age ──
-    st.markdown('<h4 style="font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:#6b7d8c;margin:0 0 4px;font-weight:700">Explain Age</h4>', unsafe_allow_html=True)
-    st.slider("Age", 5, 35, key="age", label_visibility="collapsed")
-
-    st.divider()
-
-    # ── Profile ──
-    st.markdown('<h4 style="font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:#6b7d8c;margin:0 0 4px;font-weight:700">Profile</h4>', unsafe_allow_html=True)
-    st.selectbox("Profession", PROFESSION_OPTIONS,
-                 index=PROFESSION_OPTIONS.index(st.session_state.profession),
-                 key="profession", label_visibility="visible")
-    st.selectbox("Expertise Level", ["Beginner", "Intermediate", "Advanced"],
-                 index=["Beginner", "Intermediate", "Advanced"].index(st.session_state.expertise_level),
-                 key="expertise_level", label_visibility="visible")
-    st.selectbox("Example Context", AREA_OF_INTEREST_OPTIONS,
-                 index=AREA_OF_INTEREST_OPTIONS.index(
-                     st.session_state.area_of_interest
-                     if st.session_state.area_of_interest in AREA_OF_INTEREST_OPTIONS else "General"
-                 ),
-                 key="area_of_interest", label_visibility="visible")
-
-    st.divider()
-
-    # ── Output ──
-    st.markdown('<h4 style="font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:#6b7d8c;margin:0 0 4px;font-weight:700">Output</h4>', unsafe_allow_html=True)
-    st.checkbox("Include examples", key="include_examples")
-    st.checkbox("Include follow-up questions", key="include_questions")
-
-    st.divider()
-
-    # ── Topic Packs ──
-    st.markdown('<h4 style="font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:#6b7d8c;margin:0 0 4px;font-weight:700">Topic Packs</h4>', unsafe_allow_html=True)
-    pack_names = [""] + sorted(TOPICS_DATA.keys())
-    st.selectbox("Pack", pack_names,
-                 index=pack_names.index(st.session_state.selected_pack)
-                 if st.session_state.selected_pack in pack_names else 0,
-                 key="selected_pack",
-                 label_visibility="collapsed")
-    if st.session_state.selected_pack:
-        for t in TOPICS_DATA[st.session_state.selected_pack]:
-            if st.button(t, key=f"pack_{t}", use_container_width=True):
-                st.session_state._force_fresh = True
-                handle_send(t)
-                st.rerun()
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ── Main area ─────────────────────────────────────────────────────────────────
-
-def render_main():
-    chat = _active_chat()
-
-    # ── Full-width overlays (quiz setup / active quiz) ──
     if chat and chat.get("show_quiz_setup"):
-        col_chat, col_right = st.columns([3, 1], gap="medium")
-        with col_chat:
-            render_quiz_setup(chat)
-        with col_right:
-            render_right_panel()
+        st.markdown('<div class="quiz-pane" style="padding:18px 18px 20px">',unsafe_allow_html=True)
+        render_quiz_setup(chat)
+        st.markdown('</div>',unsafe_allow_html=True)
         return
-
     if chat and chat.get("quiz_state"):
-        col_chat, col_right = st.columns([3, 1], gap="medium")
-        with col_chat:
-            render_quiz(chat)
-        with col_right:
-            render_right_panel()
+        st.markdown('<div class="quiz-pane" style="padding:14px 18px 20px">',unsafe_allow_html=True)
+        render_quiz(chat)
+        st.markdown('</div>',unsafe_allow_html=True)
         return
 
-    # ── Normal layout: chat area | right settings panel ──
-    col_chat, col_right = st.columns([3, 1], gap="medium")
+    pending_preview = (st.session_state.get("_pending_send_text") or "").strip()
 
-    with col_chat:
-        # Message list
-        if not chat:
-            st.markdown(
-                '<p style="color:#7a8d99;text-align:center;margin-top:80px;font-size:.95rem">'
-                'Start a conversation — type a question or pick a topic from the right panel.</p>',
-                unsafe_allow_html=True,
-            )
+    msg_box=st.container(height=760,border=False)
+    with msg_box:
+        if not chat or not chat.get("messages"):
+            st.markdown('<p style="color:#6b7d8c;text-align:center;margin-top:80px;font-size:.95rem">Select a topic or type a question to begin.</p>',unsafe_allow_html=True)
         else:
-            for i, msg in enumerate(chat["messages"]):
-                render_message(msg, i)
+            for i,m in enumerate(chat["messages"]): render_msg(m,i)
+        if pending_preview:
+            render_msg({"role":"user","text":pending_preview}, -1)
 
-        # ── Quiz launch button (visible mid-chat) ──
-        if chat and chat.get("messages") and not chat.get("quiz_state") and not chat.get("show_quiz_setup"):
-            st.markdown('<div style="display:flex;justify-content:flex-end;margin-top:8px">', unsafe_allow_html=True)
-            if st.button("🎯 Start Quiz", key="btn_launch_quiz"):
-                qt = chat.get("topic", "")
-                if chat.get("doc_id"):
-                    qt = re.sub(r"^Document:\s*", "", qt, flags=re.IGNORECASE)
-                    qt = re.sub(r"\.(pdf|docx|txt|md|csv|html?)$", "", qt, flags=re.IGNORECASE).strip()
-                    if not qt:
-                        qt = "the uploaded document"
-                chat["show_quiz_setup"] = True
-                chat["quiz_topic"] = qt
+    if st.session_state.get("_pending_send_text"):
+        send_text = st.session_state._pending_send_text
+        send_force = bool(st.session_state.get("_pending_send_force_fresh", False))
+        st.session_state._pending_send_text = ""
+        st.session_state._pending_send_force_fresh = False
+        try:
+            do_send(send_text, force_fresh=send_force, live_target=msg_box)
+        finally:
+            st.session_state._is_generating = False
+        st.session_state._ic += 1
+        st.rerun()
+
+    # ── Composer — fixed bottom, NO scroll ──
+    # Wrap in a div class so CSS .cmp-bar targets it
+    st.markdown('<div class="cmp-bar">',unsafe_allow_html=True)
+    err_txt=_err()
+    blocked=bool(err_txt) or bool(st.session_state.get("_is_generating"))
+    ik=f"ci_{st.session_state._ic}"
+    if st.session_state._pending_prompt_text:
+        st.session_state[ik] = st.session_state._pending_prompt_text
+        st.session_state._pending_prompt_text = ""
+
+    # 3 columns: attach | textarea | [quiz+mic+send grouped]
+    # Keep a slightly wider attach lane so uploader chrome never overlaps the textarea.
+    c_att, c_inp, c_acts = st.columns([0.72, 5.4, 1.65], gap="small")
+
+    with c_att:
+        st.markdown('<div class="cmp-attach">',unsafe_allow_html=True)
+        with st.popover("📎", use_container_width=True):
+            up = st.file_uploader(
+                "Upload document",
+                type=["pdf", "docx", "txt", "md", "csv", "html"],
+                key=f"up_{st.session_state._ic}",
+                label_visibility="visible",
+                help="Upload document",
+            )
+            if up:
+                fn = up.name
+                sz = up.getbuffer().nbytes / 1024 / 1024
+                up.seek(0)
+                st.toast(f"✓ {fn} ({sz:.1f}MB) uploading…", icon="📎")
+                do_upload(up)
+                st.session_state._ic += 1
                 st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>',unsafe_allow_html=True)
 
-        # ── Chat input ──
-        prompt = st.chat_input("Type your message…", key="chat_input_box")
-        if prompt:
-            handle_send(prompt)
-            st.rerun()
+    with c_inp:
+        txt=st.text_area(
+            "msg",
+            key=ik,
+            placeholder="Type your message…",
+            label_visibility="collapsed",
+            disabled=blocked,
+            height=32,
+        )
+    pending=(txt or "").strip()
 
-    with col_right:
-        render_right_panel()
+    # Action buttons — nested 3 equal columns so all buttons are identical size/height
+    with c_acts:
+        qok=bool(chat and chat.get("messages") and not chat.get("quiz_state") and not chat.get("show_quiz_setup"))
+        ca, cb, cc = st.columns([1,1,1], gap="small")
+        with ca:
+            if st.button("🎯",key="b_quiz",disabled=not qok,help="Start quiz",use_container_width=True):
+                qt=re.sub(r"^Document:\s*","",chat.get("topic",""),flags=re.IGNORECASE)
+                qt=re.sub(r"\.(pdf|docx|txt|md|csv|html?)$","",qt,flags=re.IGNORECASE).strip()
+                chat["show_quiz_setup"]=True; chat["quiz_topic"]=qt; st.rerun()
+        with cb:
+            mic_html = """
+<style>
+  body{margin:0;padding:0;overflow:hidden;}
+  #mic{width:100%;height:36px;border:1px solid #c5d6d4;border-radius:9px;
+       background:#fff;cursor:pointer;font-size:18px;font-weight:bold;
+       font-family:inherit;display:flex;align-items:center;justify-content:center;}
+  #mic.active{background:linear-gradient(135deg,#b91c1c,#dc2626);color:#fff;
+              border-color:#991b1b;box-shadow:0 3px 10px rgba(185,28,28,.35);}
+</style>
+<button id="mic" onclick="toggle()">🎤</button>
+<script>
+  var recCtor=window.SpeechRecognition||window.webkitSpeechRecognition;
+  var rec=null, active=false, finalText='';
 
+  function toggle(){
+    if(!recCtor){ alert('Live dictation needs Chrome or Edge.'); return; }
+    if(active) stop(); else start();
+  }
 
-# ── Main entry ────────────────────────────────────────────────────────────────
+  function start(){
+    if(!rec){
+      rec=new recCtor();
+      rec.continuous=true;
+      rec.interimResults=true;
+      rec.lang='en-US';
+      rec.onresult=function(e){
+        var interim='';
+        for(var i=e.resultIndex;i<e.results.length;i++){
+          var t=(e.results[i][0]&&e.results[i][0].transcript)||'';
+          if(e.results[i].isFinal) finalText+=t+' ';
+          else interim+=t;
+        }
+                var msg={type:'ax-dictation',text:(finalText+interim).trim()};
+                try{ window.postMessage(msg,'*'); }catch(_e){}
+                try{ window.parent.postMessage(msg,'*'); }catch(_e){}
+                try{ window.top.postMessage(msg,'*'); }catch(_e){}
+      };
+      rec.onend=function(){ if(active){ try{rec.start();}catch(_){} } };
+      rec.onerror=function(e){ console.log('mic error',e.error); active=false; setVisual(false); };
+    }
+    finalText='';
+    // Signal parent to snapshot current textarea value as base
+    var startMsg={type:'ax-dictation-start'};
+    try{ window.postMessage(startMsg,'*'); }catch(_e){}
+    try{ window.parent.postMessage(startMsg,'*'); }catch(_e){}
+    try{ window.top.postMessage(startMsg,'*'); }catch(_e){}
+    active=true; setVisual(true);
+    try{ rec.start(); }catch(e){ console.log(e); }
+  }
 
-st.set_page_config(
-    page_title="AgeXplain",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+  function stop(){
+    active=false; setVisual(false);
+    try{ rec.stop(); }catch(_){}
+  }
 
+  function setVisual(on){
+    var b=document.getElementById('mic');
+    if(on) b.classList.add('active'); else b.classList.remove('active');
+  }
+</script>
+"""
+            mic_src = "data:text/html;charset=utf-8," + quote(mic_html)
+            st.iframe(mic_src, height=40)
+        with cc:
+            sent=st.button("➤",key="b_send",disabled=blocked,help="Send",use_container_width=True)
+
+    if sent and pending:
+        _queue_send(pending)
+        st.rerun()
+    if err_txt:
+        st.markdown(f'<p style="font-size:.74rem;color:#a62f2f;margin:3px 0 0;text-align:center">{_esc(err_txt)}</p>',unsafe_allow_html=True)
+    elif st.session_state.get("_is_generating"):
+        st.markdown('<p style="font-size:.74rem;color:#0f766e;margin:3px 0 0;text-align:center">Generating response...</p>',unsafe_allow_html=True)
+
+    st.markdown('</div>',unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="AgeXplain",page_icon="🧠",layout="wide",initial_sidebar_state="collapsed")
 _inject_css()
-render_sidebar()
-render_main()
+_inject_js()
 
-
-
+chat=_chat()
+L,C,R=st.columns([0.82,3.0,1.10],gap="small")
+with L:
+    with st.container(border=True): render_left()
+with C:
+    with st.container(border=True): render_center(chat)
+with R:
+    with st.container(border=True): render_right()

@@ -1,0 +1,1046 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
+
+/* =========================================================
+   PAGE + RESET
+   ========================================================= */
+:root {
+  --page-bg-1: #dff1ee;
+  --page-bg-2: #f8fbfb;
+  --panel-bg: #ffffff;
+  --panel-soft: #f8fbfb;
+  --panel-border: #d9e2e6;
+  --text: #263746;
+  --muted: #6b7f8f;
+  --teal: #0f766e;
+  --teal-2: #109e93;
+  --shadow: 0 8px 32px rgba(18, 36, 54, 0.22);
+  --shadow-strong: 0 12px 44px rgba(14, 30, 50, 0.30);
+  --radius: 16px;
+  --gap: 16px;
+}
+
+*, *::before, *::after { box-sizing: border-box !important; }
+
+html, body,
+[data-testid="stAppViewContainer"],
+[data-testid="stApp"] {
+  font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif !important;
+  background: #0d6b63 !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+}
+
+#MainMenu,
+footer,
+header,
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"] {
+  display: none !important;
+}
+
+/* Remove ALL residual top inset added by Streamlit main wrappers */
+[data-testid="stMain"],
+[data-testid="stMain"] > div,
+[data-testid="stMainBlockContainer"],
+[data-testid="stAppViewContainer"] [data-testid="stMainBlockContainer"],
+.stMainBlockContainer,
+section[data-testid="stMain"] > div:first-child {
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+}
+
+/* =========================================================
+   IMPORTANT STREAMLIT RESET
+   Do NOT make every horizontal block/column 100vh.
+   Nested rows are used inside the composer and right panel.
+   ========================================================= */
+[data-testid="stHorizontalBlock"] {
+  height: auto !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+}
+
+[data-testid="column"] {
+  min-height: 0 !important;
+  margin: 0 !important;
+}
+
+/* =========================================================
+   MAIN 3-COLUMN DASHBOARD LAYOUT
+   Left, center, and right appear as separate full-height cards.
+   ========================================================= */
+/* .block-container {
+  padding: 16px !important;
+  max-width: 100% !important;
+  width: 100% !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+  margin: 0 !important;
+} */
+
+.block-container {
+  padding: 0 10px 10px !important;
+  height: 100vh !important;
+  box-sizing: border-box !important;
+}
+
+/* Top-level vertical wrapper */
+.block-container > div,
+.block-container > div > [data-testid="stVerticalBlock"] {
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Top-level 3-column row only */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] {
+  display: flex !important;
+  align-items: stretch !important;
+  gap: var(--gap) !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  flex-wrap: nowrap !important;
+  overflow: hidden !important;
+}
+
+/* Top-level columns only */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: visible !important;
+  padding: 0 !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"] > div {
+  height: 100% !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* The visible card/panel for each main column */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"] > div > [data-testid="stVerticalBlockBorderWrapper"] {
+  height: calc(100% - 10px) !important;
+  min-height: 0 !important;
+  border-radius: 18px !important;
+  border: none !important;
+  background: #ffffff !important;
+  box-shadow:
+    0 8px 24px rgba(0,0,0,0.22),
+    0 24px 60px rgba(0,0,0,0.30) !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  margin-bottom: 10px !important;
+}
+
+/* Left panel — white/teal card with layered shadow */
+.block-container > div > [data-testid="column"] > div > [data-testid="stVerticalBlockBorderWrapper"] {
+  border-radius: 18px !important;
+  background: #ffffff !important;
+  box-shadow:
+    0 0 0 1px rgba(15,118,110,0.10),
+    0 4px 12px rgba(15,118,110,0.10),
+    0 14px 32px rgba(16,40,56,0.13) !important;
+  border: 1px solid rgba(15,118,110,0.20) !important;
+}
+
+/* Center panel — pure white, slightly deeper shadow */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) > div > [data-testid="stVerticalBlockBorderWrapper"] {
+  background: #ffffff !important;
+  border: none !important;
+  box-shadow:
+    0 10px 32px rgba(0,0,0,0.28),
+    0 32px 72px rgba(0,0,0,0.36) !important;
+}
+
+/* Right panel — white */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] {
+  background: #ffffff !important;
+  border: none !important;
+}
+
+/* Left panel — white */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(1) > div > [data-testid="stVerticalBlockBorderWrapper"] {
+  background: #ffffff !important;
+  border: none !important;
+}
+
+/* Inner panel content */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(1) > div > [data-testid="stVerticalBlockBorderWrapper"] > div {
+  padding: 14px 12px !important;
+  overflow-y: auto !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  background: transparent !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) > div > [data-testid="stVerticalBlockBorderWrapper"] > div {
+  padding: 0 !important;
+  overflow: hidden !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  background: #ffffff !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div {
+  padding: 14px 14px 12px !important;
+  overflow-y: auto !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  background: var(--panel-soft) !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* Remove Streamlit default vertical gaps inside the main panels */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"] > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+  flex: 1 1 auto !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  width: 100% !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"] > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] > [data-testid="element-container"] {
+  margin: 0 !important;
+  width: 100% !important;
+}
+
+/* Center message area: strip nested border, allow messages to expand */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlockBorderWrapper"] {
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  overflow-y: auto !important;
+  flex: 1 1 auto !important;
+  /* Override Streamlit's fixed inline height so the message area fills available space dynamically */
+  height: auto !important;
+  max-height: none !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlockBorderWrapper"] > div {
+  padding: 24px 10% 10px !important;
+  background: linear-gradient(180deg, rgba(15,118,110,.04) 0%, transparent 16%) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+/* ── LEFT ── */
+[data-testid="column"]:nth-child(1) .stButton > button {
+  border-radius: 10px !important; border: 1px solid transparent !important;
+  background: transparent !important; color: #2a3b49 !important;
+  font-size: .84rem !important; font-weight: 500 !important;
+  padding: 7px 10px !important; box-shadow: none !important;
+  width: 100% !important; text-align: left !important;
+  font-family: 'Manrope', sans-serif !important; transition: all .14s !important;
+}
+[data-testid="column"]:nth-child(1) .stButton > button:hover { background: #f2f7f8 !important; border-color: #d3e0e3 !important; }
+.chat-active .stButton > button { background: #e2efee !important; border-color: #9cc5c1 !important; color: #114745 !important; font-weight: 700 !important; }
+.clear-btn .stButton > button {
+  padding: 4px 8px !important; font-size: .72rem !important; font-weight: 700 !important;
+  border-radius: 8px !important; border: 1px solid #c7d7de !important; background: #fff !important;
+  color: #3f5564 !important; width: auto !important; text-align: center !important; box-shadow: none !important;
+}
+.del-btn .stButton > button {
+  width: 26px !important; height: 26px !important; min-height: 26px !important;
+  padding: 0 !important; font-size: 14px !important; border-radius: 7px !important;
+  border: 1px solid #d0dee3 !important; background: #fff !important; color: #6c7f8c !important;
+  text-align: center !important; box-shadow: none !important;
+}
+.del-btn .stButton > button:hover { background: #fff1ec !important; border-color: #f3ba9b !important; color: #c2470a !important; }
+
+/* ── RIGHT – compact ── */
+[data-testid="column"]:nth-child(3) [data-testid="stVerticalBlock"] { gap: 0 !important; }
+[data-testid="column"]:nth-child(3) .element-container { margin: 0 !important; padding: 0 !important; }
+[data-testid="column"]:nth-child(3) .stSelectbox,
+[data-testid="column"]:nth-child(3) .stTextInput { margin: 0 0 2px !important; }
+[data-testid="column"]:nth-child(3) .stSlider { margin: 0 0 3px !important; }
+[data-testid="column"]:nth-child(3) .stCheckbox { margin: 0 !important; padding: 0 !important; }
+[data-testid="column"]:nth-child(3) .stWidgetLabel p {
+  font-size: .74rem !important; font-weight: 600 !important; color: #0f1722 !important;
+  margin: 0 0 1px !important; line-height: 1.15 !important;
+}
+[data-testid="column"]:nth-child(3) [data-baseweb="select"] > div:first-child,
+[data-testid="column"]:nth-child(3) .stTextInput input {
+  border-radius: 8px !important; border: 1px solid #b9c8cf !important; background: #fff !important;
+  font-size: .76rem !important; color: #2a3b49 !important;
+  min-height: 30px !important; max-height: 30px !important; font-family: 'Manrope', sans-serif !important;
+}
+[data-testid="column"]:nth-child(3) [data-testid="stHorizontalBlock"] {
+  gap: 6px !important; margin: 0 !important; padding: 0 !important; height: auto !important; min-height: unset !important;
+}
+[data-testid="column"]:nth-child(3) .stButton > button {
+  border-radius: 9px !important; font-size: .74rem !important; font-weight: 700 !important;
+  padding: 4px 8px !important; border: 1px solid #b9c8cf !important;
+  background: #f6fafb !important; color: #0f1722 !important;
+  box-shadow: none !important; width: 100% !important;
+  min-height: 28px !important; height: 28px !important; margin: 0 0 2px !important;
+  font-family: 'Manrope', sans-serif !important;
+}
+[data-testid="column"]:nth-child(3) [data-testid="stSpinner"] p {
+  font-size: .72rem !important;
+  line-height: 1.2 !important;
+}
+[data-testid="column"]:nth-child(3) .stButton > button:hover { background: #ebf4f6 !important; }
+[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] { background: #0f766e !important; border-color: #0f766e !important; }
+[data-testid="column"]:nth-child(3) [data-baseweb="checkbox"] [data-checked="true"] > div { background: #0f766e !important; border-color: #0f766e !important; }
+
+/* ── COMPOSER BAR — Fixed at bottom of center column */
+.cmp-bar {
+  border-top: 2px solid #c8d9df;
+  padding: 8px 4% 10px;
+  background: #f4f8f9;
+  flex-shrink: 0 !important;
+  flex-grow: 0 !important;
+  margin-top: auto !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  margin-bottom: 0 !important;
+  position: static !important;
+  bottom: auto !important;
+  z-index: 3;
+  box-shadow: 0 -3px 12px rgba(16,40,56,.07);
+  width: 100% !important;
+}
+/* Outer row: attach | textarea | actions block */
+.cmp-bar [data-testid="stHorizontalBlock"] {
+  gap: 4px !important; align-items: center !important;
+  margin: 0 !important; padding: 0 !important; height: 36px !important; min-height: 36px !important;
+}
+/* Nested action-buttons row inside actions column */
+.cmp-bar [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] {
+  gap: 0 !important; align-items: center !important;
+  margin: 0 !important; padding: 0 !important; height: 36px !important; min-height: 36px !important;
+}
+/* Every column inside the bar (outer and nested) */
+.cmp-bar [data-testid="column"] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  min-width: 0 !important;
+  height: 36px !important;
+  min-height: 36px !important;
+}
+/* Inner wrapper div of every column */
+.cmp-bar [data-testid="column"] > div,
+.cmp-bar [data-testid="column"] > div > [data-testid="stVerticalBlock"] {
+  width: 100% !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+}
+/* Kill ALL Streamlit element margins inside the bar */
+.cmp-bar .element-container,
+.cmp-bar .stTextArea,
+.cmp-bar .stButton,
+.cmp-bar .stFileUploader,
+.cmp-bar [data-testid="stPopover"] {
+  margin: 0 !important;
+  padding: 0 !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+/* Outer row sizing: keep attach/actions lanes stable across rerenders */
+.cmp-bar > div > [data-testid="stHorizontalBlock"] > [data-testid="column"]:first-child {
+  flex: 0 0 36px !important;
+  max-width: 36px !important;
+}
+.cmp-bar > div > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) {
+  flex: 1 1 auto !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+.cmp-bar > div > [data-testid="stHorizontalBlock"] > [data-testid="column"]:last-child {
+  flex: 0 0 116px !important;
+  max-width: 116px !important;
+}
+/* Textarea wrapper: no extra chrome, match button height */
+.cmp-bar .stTextArea > label { display: none !important; }
+.cmp-bar .stTextArea [data-baseweb="textarea"] {
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+}
+/* Text area in composer: match button height exactly, no extra space */
+.cmp-bar .stTextArea textarea {
+  font-size: .91rem !important; color: #2a3b49 !important;
+  background: #ffffff !important; border: 1.5px solid #b9c8cf !important;
+  border-radius: 10px !important; padding: 6px 12px !important;
+  height: 36px !important; min-height: 36px !important; max-height: 96px !important;
+  overflow-y: auto !important; resize: none !important;
+  line-height: 1.35 !important; font-family: 'Manrope', sans-serif !important;
+  box-shadow: 0 1px 4px rgba(16,40,56,.06) !important;
+  display: flex !important; align-items: center !important; margin: 0 !important;
+}
+.cmp-bar .stTextArea textarea:focus {
+  border-color: #2b8b83 !important;
+  box-shadow: 0 0 0 3px rgba(43,139,131,.15) !important; outline: none !important;
+}
+.cmp-bar .stTextArea textarea::placeholder { color: #9ca3af !important; }
+/* All icon buttons: exact 36×36, perfectly centered */
+.cmp-bar .stButton > button {
+  height: 36px !important; width: 36px !important; min-height: 36px !important; max-height: 36px !important;
+  min-width: 36px !important; max-width: 36px !important;
+  padding: 0 !important; margin: 0 !important; border-radius: 0 !important;
+  border: 1.5px solid #b9c8cf !important; background: #ffffff !important;
+  color: #355165 !important; font-size: 15px !important;
+  box-shadow: 0 1px 3px rgba(16,40,56,.06) !important; font-family: 'Manrope', sans-serif !important;
+  display: flex !important; align-items: center !important; justify-content: center !important;
+  flex-shrink: 0 !important; flex-grow: 0 !important; line-height: 1 !important;
+}
+.cmp-bar .stButton > button:hover { background: #edf6f7 !important; border-color: #7aadb8 !important; }
+
+/* Standalone attachment icon button */
+.cmp-attach .stButton > button {
+  border-radius: 9px !important;
+}
+
+/* Attachment popover button */
+.cmp-attach [data-testid="stPopover"] button {
+  height: 36px !important;
+  width: 36px !important;
+  min-height: 36px !important;
+  max-height: 36px !important;
+  min-width: 36px !important;
+  max-width: 36px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 9px !important;
+  border: 1.5px solid #b9c8cf !important;
+  background: #ffffff !important;
+  color: #355165 !important;
+  box-shadow: 0 1px 3px rgba(16,40,56,.06) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+/* Keep popover clean: hide helper caption area only inside the popover */
+[data-testid="stPopoverContent"] [data-testid="stFileUploaderDropzoneInstructions"] {
+  display: none !important;
+}
+
+/* Outer corners: round first and last button to form a capsule group */
+.cmp-bar [data-testid=\"stHorizontalBlock\"] [data-testid=\"stHorizontalBlock\"] > [data-testid=\"column\"]:first-child .stButton > button {
+  border-radius: 9px 0 0 9px !important;
+}
+.cmp-bar [data-testid=\"stHorizontalBlock\"] [data-testid=\"stHorizontalBlock\"] > [data-testid=\"column\"]:last-child .stButton > button {
+  border-radius: 0 9px 9px 0 !important;
+}
+/* Collapse double borders between adjacent buttons */
+.cmp-bar [data-testid=\"stHorizontalBlock\"] [data-testid=\"stHorizontalBlock\"] > [data-testid=\"column\"]:not(:first-child) .stButton > button {
+  border-left: none !important;
+}
+.cmp-bar .stButton > button[title="Send"] {
+  border: 1.5px solid #0a5b56 !important;
+  background: linear-gradient(135deg, #0f766e 0%, #109e93 100%) !important;
+  color: #fff !important;
+  box-shadow: 0 3px 10px rgba(15,118,110,.28) !important;
+}
+.cmp-bar .stButton > button[title="Send"]:hover { box-shadow: 0 6px 16px rgba(15,118,110,.36) !important; }
+
+
+/* Quiz view should remain contained in center panel and scroll internally */
+[data-testid="column"]:nth-child(2) .quiz-pane {
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  box-sizing: border-box !important;
+}
+[data-testid="column"]:nth-child(2) .qscore,
+[data-testid="column"]:nth-child(2) .rev,
+[data-testid="column"]:nth-child(2) .qopt,
+[data-testid="column"]:nth-child(2) .qfb-ok,
+[data-testid="column"]:nth-child(2) .qfb-no {
+  max-width: 100% !important;
+  word-wrap: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+/* Capsule shaping for ANY button type in the nested actions row (stButton and stPopover) */
+.cmp-bar [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:first-child button {
+  border-radius: 9px 0 0 9px !important;
+}
+.cmp-bar [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:last-child button {
+  border-radius: 0 9px 9px 0 !important;
+}
+.cmp-bar [data-testid="stHorizontalBlock"] [data-testid="stHorizontalBlock"] > [data-testid="column"]:not(:first-child) button {
+  border-left: none !important;
+}
+
+/* =========================================================
+   AGEXPLAIN REACT DESIGN SYSTEM — exact port
+   Source: agexplain/frontend/src/index.css
+   ========================================================= */
+
+/* Design tokens — exact match */
+:root {
+  --bg-main:          #f4f7f8;
+  --bg-panel:         #fdfefe;
+  --bg-panel-strong:  #edf3f3;
+  --bg-chat:          #ffffff;
+  --text-strong:      #0f1722;
+  --text-body:        #2a3b49;
+  --text-muted:       #6b7d8c;
+  --line-soft:        #d9e2e6;
+  --line-strong:      #b9c8cf;
+  --brand:            #0f766e;
+  --brand-hover:      #0b5f59;
+  --accent-soft:      #e7f6f4;
+  --shadow-soft:      0 8px 22px rgba(22, 40, 54, 0.08);
+  --shadow-panel:     0 14px 30px rgba(16, 40, 56, 0.12);
+  --radius:           16px;
+  --gap:              16px;
+  --focus-ring:       0 0 0 4px rgba(43, 139, 131, 0.15);
+  --transition:       0.14s ease;
+}
+
+/* Page background — exact agexplain gradient */
+html, body,
+[data-testid="stAppViewContainer"],
+[data-testid="stApp"] {
+  font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  background:
+    radial-gradient(circle at 10% 12%, #d5ece8 0%, transparent 36%),
+    radial-gradient(circle at 88% 15%, #cfe9e4 0%, transparent 34%),
+    linear-gradient(155deg, #f8fbfb 0%, #eef4f4 100%) !important;
+}
+
+/* Container spacing */
+.block-container {
+  padding: 0 16px 16px !important;
+}
+
+/* Column gap */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] {
+  gap: var(--gap) !important;
+}
+
+/* ALL panels — base card */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"] > div > [data-testid="stVerticalBlockBorderWrapper"] {
+  background: #ffffff !important;
+  border: 1px solid var(--line-soft) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: var(--shadow-soft) !important;
+  height: calc(100% - 10px) !important;
+  margin-bottom: 10px !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* Left panel — white/teal card, colored shadow */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(1) > div > [data-testid="stVerticalBlockBorderWrapper"] {
+  background: linear-gradient(160deg, #ffffff 0%, #f5fcfb 100%) !important;
+  border: 1px solid rgba(15,118,110,0.22) !important;
+  box-shadow:
+    0 0 0 1px rgba(15,118,110,0.08),
+    0 4px 14px rgba(15,118,110,0.12),
+    0 18px 36px rgba(16,40,56,0.11) !important;
+}
+
+/* Center panel — agexplain .chat style (white, stronger shadow) */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) > div > [data-testid="stVerticalBlockBorderWrapper"] {
+  background: var(--bg-chat) !important;
+  border: 1px solid var(--line-soft) !important;
+  box-shadow: var(--shadow-panel) !important;
+}
+
+/* Left sidebar inner padding */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(1) > div > [data-testid="stVerticalBlockBorderWrapper"] > div {
+  padding: 20px 16px !important;
+}
+
+/* Right sidebar inner padding + scroll */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div {
+  padding: 12px 12px 10px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+/* Allow right panel inner stVerticalBlock to grow beyond container so scroll works */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] {
+  height: auto !important;
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
+}
+
+/* ── LEFT NAV — agexplain style ── */
+
+/* "Start New Chat" button — teal gradient like .new-chat-btn */
+[data-testid="column"]:nth-child(1) > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] > [data-testid="element-container"]:first-child .stButton > button {
+  background: linear-gradient(135deg, var(--brand) 0%, #109e93 100%) !important;
+  color: #ffffff !important;
+  border: 1px solid #0d5f59 !important;
+  border-radius: 12px !important;
+  font-size: 0.92rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.02em !important;
+  padding: 8px 16px !important;
+  width: 100% !important;
+  box-shadow: none !important;
+  transition: transform var(--transition), box-shadow var(--transition), filter var(--transition) !important;
+}
+[data-testid="column"]:nth-child(1) > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] > [data-testid="element-container"]:first-child .stButton > button:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 10px 18px rgba(10, 113, 104, 0.24) !important;
+  filter: saturate(1.06) !important;
+}
+
+/* Strip ALL spacing between chat rows — cover all nested stVerticalBlocks */
+[data-testid="column"]:nth-child(1) [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+  row-gap: 0 !important;
+}
+[data-testid="column"]:nth-child(1) [data-testid="stHorizontalBlock"] {
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 2px !important;
+  min-height: 0 !important;
+  height: auto !important;
+}
+/* Streamlit wraps each stHorizontalBlock in a plain div — zero that too */
+[data-testid="column"]:nth-child(1) > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] > div {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+  height: auto !important;
+}
+[data-testid="column"]:nth-child(1) [data-testid="element-container"],
+[data-testid="column"]:nth-child(1) .stElementContainer {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+  height: auto !important;
+}
+[data-testid="column"]:nth-child(1) .stButton {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+  height: auto !important;
+}
+
+/* Chat list items — tight, height = text only */
+[data-testid="column"]:nth-child(1) .stButton > button {
+  border-radius: 7px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: var(--text-body) !important;
+  font-size: 0.70rem !important;
+  font-weight: 500 !important;
+  padding: 1px 8px !important;
+  min-height: 0 !important;
+  height: auto !important;
+  line-height: 1.15 !important;
+  box-shadow: none !important;
+  width: 100% !important;
+  text-align: left !important;
+  font-family: 'Manrope', sans-serif !important;
+  transition: background var(--transition), border-color var(--transition), transform var(--transition) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  display: block !important;
+}
+[data-testid="column"]:nth-child(1) .stButton > button:hover {
+  background: #f2f7f8 !important;
+  border-color: #d3e0e3 !important;
+  transform: translateX(2px) !important;
+}
+
+/* Active chat item */
+.chat-active .stButton > button {
+  background: #e2efee !important;
+  border-color: #9cc5c1 !important;
+  color: #114745 !important;
+  font-weight: 700 !important;
+}
+
+/* Clear All — one line, height = text only */
+.clear-btn .stButton > button {
+  white-space: nowrap !important;
+  padding: 0 7px !important;
+  font-size: 0.67rem !important;
+  font-weight: 700 !important;
+  border-radius: 5px !important;
+  border: 1px solid #d4e0e5 !important;
+  background: transparent !important;
+  color: #8a9faa !important;
+  width: auto !important;
+  min-height: 0 !important;
+  height: auto !important;
+  line-height: 1.2 !important;
+  text-align: center !important;
+  box-shadow: none !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  overflow-wrap: normal !important;
+  word-break: normal !important;
+}
+.clear-btn .stButton > button:hover {
+  background: #fff0ee !important;
+  border-color: #f0b8a8 !important;
+  color: #b04020 !important;
+}
+/* Align the header row so label and button sit on same baseline */
+.clear-btn,
+.clear-btn > div,
+.clear-btn .stButton {
+  display: flex !important;
+  align-items: center !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Delete × button */
+.del-btn .stButton > button {
+  width: 20px !important;
+  height: 20px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  font-size: 12px !important;
+  border-radius: 5px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: #9aaab4 !important;
+  text-align: center !important;
+  box-shadow: none !important;
+  line-height: 1 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.del-btn .stButton > button:hover {
+  background: #fff0ec !important;
+  border-color: #f3b89b !important;
+  color: #c2470a !important;
+}
+.del-btn,
+.del-btn > div,
+.del-btn .stButton {
+  display: flex !important;
+  align-items: center !important;
+  height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Left sidebar section labels — agexplain h3 style */
+[data-testid="column"]:nth-child(1) [data-testid="stMarkdownContainer"] p[style*="letter-spacing"] {
+  font-size: 0.78rem !important; font-weight: 700 !important;
+  letter-spacing: 0.12em !important; text-transform: uppercase !important;
+  color: var(--text-muted) !important; margin: 6px 0 10px !important;
+}
+
+/* ── RIGHT PANEL — agexplain right sidebar style ── */
+[data-testid="column"]:nth-child(3) [data-testid="stVerticalBlock"] { gap: 0 !important; }
+[data-testid="column"]:nth-child(3) .element-container,
+[data-testid="column"]:nth-child(3) [data-testid="element-container"] { margin: 0 !important; padding: 0 !important; min-height: 0 !important; }
+[data-testid="column"]:nth-child(3) .stSelectbox,
+[data-testid="column"]:nth-child(3) .stTextInput { margin: 0 0 2px !important; }
+[data-testid="column"]:nth-child(3) .stSlider { margin: 0 0 2px !important; }
+[data-testid="column"]:nth-child(3) .stCheckbox { margin: 0 !important; padding: 0 !important; }
+
+[data-testid="column"]:nth-child(3) .stWidgetLabel p,
+[data-testid="column"]:nth-child(3) label {
+  font-size: 0.72rem !important; font-weight: 700 !important;
+  color: var(--text-muted) !important;
+  letter-spacing: 0.10em !important; text-transform: uppercase !important;
+  margin: 0 0 1px !important; line-height: 1.1 !important;
+}
+
+[data-testid="column"]:nth-child(3) [data-baseweb="select"] > div:first-child,
+[data-testid="column"]:nth-child(3) .stTextInput input {
+  border-radius: 8px !important;
+  border: 1px solid var(--line-strong) !important;
+  background: #fcfefe !important;
+  font-size: 0.78rem !important; color: var(--text-body) !important;
+  min-height: 28px !important; max-height: 28px !important;
+  font-family: 'Manrope', sans-serif !important;
+  transition: border-color var(--transition), box-shadow var(--transition) !important;
+}
+[data-testid="column"]:nth-child(3) [data-baseweb="select"] > div:first-child:focus-within,
+[data-testid="column"]:nth-child(3) .stTextInput input:focus {
+  border-color: #2b8b83 !important;
+  box-shadow: var(--focus-ring) !important;
+  outline: none !important;
+}
+
+[data-testid="column"]:nth-child(3) [data-testid="stHorizontalBlock"] {
+  gap: 6px !important; margin: 0 !important; padding: 0 !important; height: auto !important; min-height: unset !important;
+}
+
+[data-testid="column"]:nth-child(3) .stButton > button {
+  border-radius: 9px !important; font-size: .82rem !important; font-weight: 700 !important;
+  padding: 6px 10px !important; border: 1px solid var(--line-strong) !important;
+  background: #ffffff !important; color: var(--text-body) !important;
+  box-shadow: none !important; width: 100% !important;
+  min-height: 32px !important; height: 32px !important; margin: 0 0 2px !important;
+  font-family: 'Manrope', sans-serif !important;
+  transition: background var(--transition), border-color var(--transition) !important;
+}
+[data-testid="column"]:nth-child(3) .stButton > button:hover { background: #edf6f7 !important; border-color: #9cb5be !important; }
+
+[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] { background: var(--brand) !important; border-color: var(--brand) !important; }
+[data-testid="column"]:nth-child(3) [data-baseweb="checkbox"] [data-checked="true"] > div { background: var(--brand) !important; border-color: var(--brand) !important; }
+
+/* ── Topic pack pills — buttons inside stHorizontalBlock rows in column 3 ── */
+/* This correctly targets ONLY the pill buttons (stCheckbox rows have no stButton) */
+[data-testid="column"]:nth-child(3) [data-testid="stHorizontalBlock"] .stButton > button {
+  padding: 3px 6px !important;
+  font-size: 0.67rem !important;
+  font-weight: 600 !important;
+  border-radius: 6px !important;
+  border: 1px solid #9dcdc8 !important;
+  background: #edf7f6 !important;
+  color: #0a4e4a !important;
+  height: auto !important;
+  min-height: 0 !important;
+  line-height: 1.3 !important;
+  width: 100% !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  font-family: 'Manrope', sans-serif !important;
+  transition: background 0.12s, border-color 0.12s, transform 0.1s !important;
+}
+[data-testid="column"]:nth-child(3) [data-testid="stHorizontalBlock"] .stButton > button:hover {
+  background: #c9ecea !important;
+  border-color: #0f766e !important;
+  color: #083d3a !important;
+  transform: translateY(-1px) !important;
+}
+[data-testid="column"]:nth-child(3) [data-testid="stHorizontalBlock"] {
+  gap: 4px !important;
+  margin: 0 0 3px !important;
+  padding: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+/* ── MESSAGES — agexplain .msg style ── */
+.mu  { display:flex; justify-content:flex-end; margin:10px 0 10px 18%; }
+.mu-i{ background:#dff3ee; border:1px solid #bfe2d8; border-radius:12px 12px 2px 12px; padding:8px 14px; color:#133946; font-size:.9rem; line-height:1.55; word-break:break-word; }
+.mu-w{ font-size:10px; font-weight:700; color:var(--text-muted); text-align:right; margin-bottom:4px; letter-spacing:.04em; text-transform:uppercase; }
+.ma  { margin:10px 18% 10px 0; }
+.ma-i{ background:#f3f8f8; border:1px solid #d8e6e4; border-radius:2px 12px 12px 12px; padding:10px 12px; color:#1f3746; font-size:.9rem; word-break:break-word; }
+.ma-w{ font-size:10px; font-weight:700; color:var(--text-muted); margin-bottom:5px; letter-spacing:.04em; text-transform:uppercase; }
+
+/* Content sections — agexplain .assistant-section */
+.sb  { white-space:pre-wrap; word-wrap:break-word; line-height:1.55; margin-bottom:8px; padding:8px 10px; border-radius:6px; background:#fdfeff; font-size:.88rem; border:1px solid #e0eaec; }
+.sb:last-child{ margin-bottom:0; }
+.sb-e { border-left:3px solid #10b981!important; background:#fdfeff!important; }
+.sb-ex{ border-left:3px solid #fbbf24!important; background:#fdfeff!important; }
+.sb-q { border-left:3px solid #2563eb!important; background:#fdfeff!important; }
+.sb-f { border-left:3px solid #8b5cf6!important; background:#f3f4f6!important; }
+.st2  { font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; margin-bottom:4px; display:block; }
+.st-e{color:#059669} .st-ex{color:#d97706} .st-q{color:#2563eb} .st-f{color:#7c3aed}
+
+.merr{ display:flex; align-items:flex-start; gap:10px; padding:12px 16px; border-radius:8px; background:rgba(239,68,68,.08); border:1px solid rgba(239,68,68,.3); color:#dc2626; font-size:.9rem; margin:8px 0; }
+.tbox{ background:#f0f9ff; border:1px solid #bae6fd; border-radius:10px; padding:14px 16px; margin-top:8px; }
+.tbox strong{ display:block; font-size:13px; color:#0369a1; margin-bottom:10px; }
+.tbox p{ font-size:12px; color:#64748b; font-style:italic; margin:8px 0 0; }
+.pill-row .stButton > button { background:#fff!important; border:1.5px solid #38bdf8!important; color:#0284c7!important; border-radius:999px!important; padding:5px 14px!important; font-size:13px!important; font-weight:600!important; box-shadow:none!important; }
+.pill-row .stButton > button:hover { background:#0ea5e9!important; color:#fff!important; border-color:#0ea5e9!important; }
+
+/* ── QUIZ ── */
+.qbar{width:100%;height:7px;border-radius:999px;background:#e8f1f6;overflow:hidden;margin:4px 0 0}
+.qfill{height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--brand),#18a59a);transition:width 220ms}
+.qopt{display:flex;align-items:flex-start;gap:8px;width:100%;text-align:left;padding:9px 11px;border-radius:9px;border:1px solid #cfe0e7;background:#fbfdff;color:#1f3746;font-size:.84rem;line-height:1.35;margin-bottom:6px}
+.qopt-key{width:20px;height:20px;border-radius:999px;flex:0 0 20px;display:inline-flex;align-items:center;justify-content:center;background:#eaf4f8;color:#2f4c5c;font-weight:700;font-size:.72rem;margin-top:1px}
+.qc{background:#e9faf3!important;border-color:#10b981!important} .qi{background:#fff0f0!important;border-color:#ef4444!important}
+.qc .qopt-key{background:#d1fae5!important;color:#065f46!important} .qi .qopt-key{background:#fee2e2!important;color:#991b1b!important}
+.qfb-ok{background:#f0fbf6;border:1px solid #bde9d7;color:#135445;border-radius:9px;padding:9px 11px;margin-top:7px;font-size:.83rem}
+.qfb-no{background:#fff5f5;border:1px solid #f6c8c8;color:#7f1d1d;border-radius:9px;padding:9px 11px;margin-top:7px;font-size:.83rem}
+.qscore{padding:16px 18px;background:linear-gradient(135deg,var(--brand),#109e93);color:#fff;border-radius:10px;font-size:1.32rem;font-weight:800;text-align:center;margin:10px 0 12px;border:1px solid #0a5b56}
+.qpct{font-size:.62em;margin-top:5px;font-weight:700}
+.rev{background:#fff;border:1px solid #d8e6e4;border-radius:9px;padding:9px 11px;margin-bottom:7px;font-size:.83rem;line-height:1.35}
+.rev-ok{border-left:4px solid #10b981!important} .rev-no{border-left:4px solid #ef4444!important}
+.q-primary  .stButton > button { background:linear-gradient(135deg,var(--brand),#109e93)!important; border:1px solid #0a5b56!important; color:#fff!important; border-radius:10px!important; padding:9px 18px!important; font-size:.88rem!important; font-weight:700!important; width:100%!important; }
+.q-secondary .stButton > button { background:#f6fafb!important; border:1px solid var(--line-strong)!important; color:var(--text-body)!important; border-radius:10px!important; padding:9px 16px!important; font-size:.88rem!important; font-weight:600!important; width:100%!important; }
+.qctx{background:#f2f8fa;border:1px solid #d7e7ee;color:#315060;border-radius:8px;padding:6px 8px;margin:0 0 8px;font-size:.78rem;line-height:1.32}
+.val-ok{ color:#216e39; font-size:.70rem; line-height:1.2; background:#f0fdf4; border:1px solid #86efac; padding:4px 7px; border-radius:7px; margin:1px 0; overflow-wrap:anywhere; }
+.val-err{ color:#a62f2f; font-size:.70rem; line-height:1.2; background:#fef2f2; border:1px solid #fecaca; padding:4px 7px; border-radius:7px; margin:1px 0; overflow-wrap:anywhere; }
+
+/* Scrollbar */
+::-webkit-scrollbar{width:5px;height:5px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:#b9c8cf;border-radius:4px}
+
+/* Misc */
+hr{border:none;border-top:1px solid var(--line-soft)!important;margin:6px 0!important}
+button{font-family:'Manrope',sans-serif!important}
+
+/* Focus rings */
+.stButton > button:focus-visible,
+[data-testid="stPopover"] button:focus-visible,
+.stTextInput input:focus-visible,
+.stTextArea textarea:focus-visible {
+  outline: none !important;
+  box-shadow: var(--focus-ring) !important;
+  border-color: #2b8b83 !important;
+}
+
+/* Motion accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; transform: none !important; }
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+  .block-container { padding: 0 10px 10px !important; }
+  :root { --gap: 10px; }
+}
+
+/* FINAL RIGHT-SIDEBAR OVERRIDES (keep last so they win) */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div {
+  padding: 10px 10px 8px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  scrollbar-gutter: stable both-edges !important;
+  overscroll-behavior: contain !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: #8aa5b0 transparent !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] {
+  height: auto !important;
+  min-height: 0 !important;
+  flex: 0 0 auto !important;
+  gap: 0 !important;
+}
+
+[data-testid="column"]:nth-child(3) [data-testid="element-container"] {
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+}
+
+[data-testid="column"]:nth-child(3) [data-testid="stHorizontalBlock"] {
+  gap: 3px !important;
+  margin: 0 0 2px !important;
+  min-height: 0 !important;
+}
+
+[data-testid="column"]:nth-child(3) [data-testid="stHorizontalBlock"] .stButton > button {
+  font-size: 0.70rem !important;
+  line-height: 1.25 !important;
+  padding: 2px 5px !important;
+  min-height: 24px !important;
+  border-radius: 6px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+[data-testid="column"]:nth-child(3) [data-testid="stCheckbox"] label,
+[data-testid="column"]:nth-child(3) [data-testid="stCheckbox"] p {
+  font-size: 0.74rem !important;
+  line-height: 1.2 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  white-space: nowrap !important;
+}
+
+[data-testid="column"]:nth-child(3) .stWidgetLabel p,
+[data-testid="column"]:nth-child(3) label {
+  font-size: 0.70rem !important;
+  letter-spacing: 0.06em !important;
+}
+
+/* Right sidebar unified typography (match subtopic pills style) */
+[data-testid="column"]:nth-child(3),
+[data-testid="column"]:nth-child(3) * {
+  font-family: 'Manrope', sans-serif !important;
+}
+
+[data-testid="column"]:nth-child(3) [data-baseweb="select"] *,
+[data-testid="column"]:nth-child(3) .stTextInput input,
+[data-testid="column"]:nth-child(3) .stSlider,
+[data-testid="column"]:nth-child(3) .stCheckbox,
+[data-testid="column"]:nth-child(3) .stButton > button {
+  font-size: 0.70rem !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div::-webkit-scrollbar {
+  width: 7px !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div::-webkit-scrollbar-thumb {
+  background: #8aa5b0 !important;
+  border-radius: 8px !important;
+}
+
+/* Left sidebar typography + pills style (match right sidebar) */
+[data-testid="column"]:nth-child(1),
+[data-testid="column"]:nth-child(1) * {
+  font-family: 'Manrope', sans-serif !important;
+}
+
+[data-testid="column"]:nth-child(1) .stWidgetLabel p,
+[data-testid="column"]:nth-child(1) label,
+[data-testid="column"]:nth-child(1) .stSelectbox,
+[data-testid="column"]:nth-child(1) .stButton > button {
+  font-size: 0.70rem !important;
+}
+
+[data-testid="column"]:nth-child(1) [data-baseweb="select"] > div:first-child {
+  min-height: 28px !important;
+  max-height: 28px !important;
+  border-radius: 8px !important;
+  border: 1px solid var(--line-strong) !important;
+  background: #fcfefe !important;
+}
+
+[data-testid="column"]:nth-child(1) [data-testid="stHorizontalBlock"] .stButton > button {
+  font-size: 0.70rem !important;
+  line-height: 1.25 !important;
+  padding: 2px 5px !important;
+  min-height: 24px !important;
+  border-radius: 6px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+
+

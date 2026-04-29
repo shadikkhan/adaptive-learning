@@ -82,10 +82,8 @@ def cleanup_audio_files(*, force: bool = False) -> dict:
 
 
 def _compact_for_tts(text: str) -> str:
-    compact = " ".join((text or "").split())
-    if len(compact) <= MAX_TTS_CHARS:
-        return compact
-    return compact[:MAX_TTS_CHARS].rsplit(" ", 1)[0].strip()
+    # Normalize whitespace only; let gTTS handle its own limits
+    return " ".join((text or "").split())
 
 
 def synthesize_tts_mp3(text: str, *, lang: str = "en") -> Optional[Path]:
