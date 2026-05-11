@@ -5,11 +5,21 @@ This demonstrates how to consume the Server-Sent Events (SSE) from the /api/expl
 
 import requests
 import json
+from pathlib import Path
+
+
+def _base_api_url() -> str:
+    config_path = Path(__file__).resolve().parents[2] / "config.json"
+    root_config = json.loads(config_path.read_text())
+    backend_cfg = root_config["backend"]
+    host = backend_cfg["host"]
+    port = backend_cfg["port"]
+    return f"http://{host}:{port}/api"
 
 
 def test_streaming_endpoint():
     """Test the streaming explain endpoint"""
-    url = "http://localhost:8000/api/explain/stream"
+    url = f"{_base_api_url()}/explain/stream"
     
     payload = {
         "user_input": "What is photosynthesis?",
@@ -58,7 +68,7 @@ def test_streaming_endpoint():
 
 def test_non_streaming_endpoint():
     """Test the non-streaming explain endpoint"""
-    url = "http://localhost:8000/api/explain"
+    url = f"{_base_api_url()}/explain"
     
     payload = {
         "user_input": "What is photosynthesis?",

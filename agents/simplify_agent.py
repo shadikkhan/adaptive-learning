@@ -113,6 +113,46 @@ def _first_user_topic(messages):
                 return content
     return ""
 
+
+def _character_instructions(character: str) -> str:
+    """
+    Generate tone and style instructions based on selected character.
+    """
+    character_map = {
+        "Friendly Teacher": (
+            "You are a warm, encouraging teacher. Use simple analogies, celebrate effort, "
+            "and break down concepts into digestible pieces. Be patient and supportive."
+        ),
+        "Stern Professor": (
+            "You are a rigorous, academic instructor. Use precise terminology, expect critical thinking, "
+            "and provide detailed factual explanations. Be formal and evidence-based."
+        ),
+        "Curious Scientist": (
+            "You are an inquisitive researcher. Ask 'why' and 'how', explain mechanisms and cause-effect, "
+            "use evidence and experiments, wonder aloud about implications."
+        ),
+        "Pirate": (
+            "You are a swashbuckling pirate! Use maritime metaphors, adventure language, "
+            "treasure hunts for knowledge, and playful humor. Make learning feel like an exciting voyage."
+        ),
+        "Doctor": (
+            "You are a knowledgeable healthcare professional. Focus on health implications, "
+            "use medical/clinical language appropriately for age, explain body systems clearly."
+        ),
+        "Comedian": (
+            "You are a witty, entertaining comedian. Use humor, puns, and funny analogies. "
+            "Make learning entertaining and memorable through laughter."
+        ),
+        "Storyteller": (
+            "You are a skilled narrative writer. Frame concepts as stories with characters, plot, "
+            "and drama. Help learners remember through engaging narratives and vivid imagery."
+        ),
+    }
+    
+    # Return the character instruction, or use default if not recognized
+    return character_map.get(character, character_map["Friendly Teacher"])
+
+
 def simplify_agent(state: ExplainState):
     log_event(
         "simplify_agent.start",
@@ -126,23 +166,29 @@ def simplify_agent(state: ExplainState):
     profession = (learner.get("profession") or "").strip()
     expertise_level = (learner.get("expertise_level") or "").strip()
     area_of_interest = (learner.get("area_of_interest") or "").strip()
+    character = (learner.get("character") or "Friendly Teacher").strip()
+    
     learner_profile = f"""
 Learner profile:
 - Profession: {profession or "Not provided"}
 - Expertise level: {expertise_level or "Not provided"}
 - Area of interest: {area_of_interest or "Not provided"}
+- Character/Personality: {character}
 """.strip()
+    
+    character_instruction = _character_instructions(character)
+    user_input = (state.get("user_input") or "").strip()
+    messages = state.get("messages", [])
+    intent = state.get("intent", "new_question")
+    retrieved_context = state.get("retrieved_context")
+    doc_style = _infer_doc_style(retrieved_context or "")
+
     personalization_rule = (
         "- If Area of interest is provided, include one short relatable context sentence using that area "
         "without changing the topic facts."
         if area_of_interest
         else "- Keep examples neutral unless an area of interest is provided."
     )
-    user_input = (state.get("user_input") or "").strip()
-    messages = state.get("messages", [])
-    intent = state.get("intent", "new_question")
-    retrieved_context = state.get("retrieved_context")
-    doc_style = _infer_doc_style(retrieved_context or "")
 
     normalized_input = user_input.lower()
     is_simplify_followup = (
@@ -151,6 +197,7 @@ Learner profile:
             "simpler",
             "simple words",
             "in simpler words",
+            "simple explanation",
             "explain that",
             "explain this again"
         ])
@@ -196,6 +243,8 @@ Previous question asked to learner:
         prompt = f"""
 You are AgeXplain, a tutor.
 
+{character_instruction}
+
 A learner aged {age} is exploring an uploaded document and has said:
 "{user_input}"
 {prev_section}
@@ -203,6 +252,7 @@ A learner aged {age} is exploring an uploaded document and has said:
 Task:
 - Explain the topic/follow-up clearly for age {age}.
 - Ground your explanation in the document excerpts above.
+- Maintain the character: {character}.
 - If evidence is weak, say "This is not clearly stated in the document" once, then provide best-effort clarification.
 
 Rules:
@@ -233,6 +283,8 @@ Rules:
         prompt = f"""
 You are AgeXplain, a tutor.
 
+{character_instruction}
+
 The learner is asking a question about an uploaded document.
 
 Learner age: {age}
@@ -245,6 +297,7 @@ Document context (from the upload):
 Task:
 Answer the user's question based ONLY on the document context provided above.
 Explain the answer in a way a {age}-year-old can understand.
+Maintain the character: {character}.
 
 Rules (must follow):
 - Write for EXACTLY age {age}.
@@ -276,9 +329,12 @@ Explanation:
 """.strip()
 
     # 2) Special branch: simplify the PREVIOUS explanation (same topic, no meta talk)
-    elif is_simplify_followup and prev_explanation:
+    # UNLESS we have document context — then regenerate from document to ensure topic accuracy
+    elif is_simplify_followup and prev_explanation and not retrieved_context:
         prompt = f"""
 You are AgeXplain, a tutor.
+
+{character_instruction}
 
 The learner asked for the SAME explanation in SIMPLER words.
 
@@ -294,6 +350,7 @@ Rewrite this previous explanation in simpler words (same meaning, same topic):
 
 Rules (must follow):
 - Keep the SAME topic.
+- Maintain the character: {character}.
 - The core topic is the original user topic above.
 - Examples/analogies are helpers only.
 - Do NOT turn an example (like baking soda) into the new main topic.
@@ -313,10 +370,60 @@ Rules (must follow):
 Rewritten explanation:
 """.strip()
 
+    # 2b) Simplify with document context (RAG-based simplification for accuracy)
+    elif is_simplify_followup and retrieved_context:
+        doc_style = _infer_doc_style(retrieved_context)
+        context_section = f"""
+Relevant excerpts from the learner's uploaded document:
+{retrieved_context}
+"""
+        prompt = f"""
+You are AgeXplain, a tutor.
+
+{character_instruction}
+
+The learner asked for a SIMPLER explanation of a topic from their uploaded document.
+
+Learner age: {age}
+User topic: {user_input}
+{learner_profile}
+
+{context_section}
+
+Task:
+- Explain the topic in SIMPLER words using the document context above.
+- Make it even simpler/more accessible than a typical explanation.
+- Ground your explanation in the document excerpts.
+- Maintain the character: {character}.
+
+Rules:
+- Write for EXACTLY age {age}.
+- If age <= 7: 1-2 sentences max, everyday words only, no technical terms, simple analogies.
+- If 8 <= age <= 10: short paragraphs, define one hard word inline, simple analogies.
+- If 11 <= age <= 14: school-level vocabulary, 1-2 technical terms OK if explained briefly.
+- If 15 <= age <= 18: high-school depth, abstraction and cause-effect OK, domain terms welcome.
+- If age >= 19: peer-level adult language, precise terminology, skip basics unless expertise is Beginner.
+- If expertise is Beginner: always define the first key term in plain language.
+- Use VERY simple language compared to a standard explanation.
+- Keep direct alignment with: "{user_input}".
+- Do NOT talk about the user's request itself.
+- Do NOT say "You want me to explain..." or "Okay!".
+- Use the learner profile to tune wording.
+- {personalization_rule}
+- Document style detected: {doc_style}.
+{_style_rules(doc_style)}
+- Return ONLY the explanation text.
+- Do not include "Explanation:".
+
+Simpler explanation:
+""".strip()
+
     # 3) General follow-up branch: more / why / another example / continue
     elif intent == "followup" and (prev_explanation or prev_question or prev_example):
         prompt = f"""
 You are AgeXplain, a tutor.
+
+{character_instruction}
 
 The learner is asking a FOLLOW-UP about the SAME topic as before.
 
@@ -339,6 +446,7 @@ Previous question asked to learner:
 Task:
 Respond to the user's follow-up while staying on the SAME topic as the previous explanation.
 Do NOT switch topics.
+Maintain the character: {character}.
 
 Rules (must follow):
 - Write for EXACTLY age {age}.
@@ -373,6 +481,8 @@ Explanation:
         prompt = f"""
 You are AgeXplain, a tutor.
 
+{character_instruction}
+
 Task: Explain the user's question for a child aged {age}.
 {learner_profile}
 
@@ -381,6 +491,7 @@ User question/topic:
 
 Rules (must follow):
 - Write for EXACTLY age {age}.
+- Maintain the character: {character}.
 - If age <= 7: 1-2 sentences max, everyday words only, no technical terms, simple analogies.
 - If 8 <= age <= 10: short paragraphs, define one hard word inline, simple analogies.
 - If 11 <= age <= 14: school-level vocabulary, 1-2 technical terms OK if explained briefly.

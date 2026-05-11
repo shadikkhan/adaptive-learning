@@ -38,12 +38,28 @@ def _infer_doc_style(text: str) -> str:
         return "book"
     return "generic"
 
+def _character_style(character: str) -> str:
+    """Generate question style based on character."""
+    styles = {
+        "Friendly Teacher": "encouraging and supportive",
+        "Stern Professor": "intellectually rigorous and challenging",
+        "Curious Scientist": "investigative and mechanistic",
+        "Pirate": "adventurous and fun",
+        "Doctor": "health-related and clinical",
+        "Comedian": "humorous and entertaining",
+        "Storyteller": "narrative-driven and imaginative",
+    }
+    return styles.get(character, styles["Friendly Teacher"])
+
+
 def think_question_agent(state: ExplainState):
     age = state["learner"]["age"]
     learner = state.get("learner", {})
     profession = (learner.get("profession") or "").strip()
     expertise_level = (learner.get("expertise_level") or "").strip()
     area_of_interest = (learner.get("area_of_interest") or "").strip()
+    character = (learner.get("character") or "Friendly Teacher").strip()
+    character_style = _character_style(character)
     explanation = state["simplified_explanation"]
     user_input = state.get("user_input", "")
     messages = state.get("messages", [])
@@ -74,6 +90,7 @@ The learner has an uploaded document. Here are relevant excerpts — prefer ques
 
     prompt = f"""
 Generate ONE factual question for a learner aged {age} based on the explanation below.
+Question style: {character_style} (character: {character})
 {doc_context_section}
 Latest user request/topic:
 {user_input}
@@ -125,7 +142,19 @@ Base it on:
     # Guardrail: if the model drifts off-topic, force a safe on-topic factual question.
     if not _is_question_on_topic(question, user_input):
         topic = (user_input or "this topic").strip().rstrip("?")
-        question = f"What does {topic} mean in this document?"
+        # If there's a document, reference it; otherwise ask a general definition/understanding question
+        if retrieved_context:
+            question = f"What does {topic} mean in this document?"
+        else:
+            # No document: ask a natural understanding question instead of a document reference
+            if age <= 7:
+                question = f"Can you tell me what {topic} is?"
+            elif age <= 10:
+                question = f"What is {topic}?"
+            elif age <= 14:
+                question = f"How would you explain {topic}?"
+            else:
+                question = f"What is the key difference in {topic}?"
 
     return {
         "thought_question": question,

@@ -1,4 +1,6 @@
 [server]
+# Port configured in ../config.json frontend.dev_port
+port = 8501
 # Avoid noisy module-path watcher warnings from transformers optional vision deps (torchvision).
 fileWatcherType = "none"
 

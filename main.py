@@ -5,10 +5,6 @@ import time
 import uuid
 import os
 from contextlib import asynccontextmanager
-from dotenv import load_dotenv
-
-load_dotenv()  # loads agexplain/backend/.env into os.environ
-
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -91,5 +87,5 @@ async def request_logging_middleware(request: Request, call_next):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8001, access_log=False)
+    uvicorn.run(app, host=config.HOST, port=config.PORT, access_log=False)
 

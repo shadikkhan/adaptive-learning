@@ -3,9 +3,23 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
+EXAMPLE_HINTS = {
+    "another example", "give me an example", "show me an example",
+    "example please", "can you give an example", "one more example"
+}
+
+SIMPLIFY_HINTS = {
+    "simpler", "simple", "in simpler words", "simple words", "simple explanation",
+    "break it down", "dumb it down", "easy version"
+}
+
 FOLLOWUP_HINTS = {
-    "tell me more", "continue", "another example", "simpler", "in simpler words",
-    "explain again", "what about", "difference", "next question", "more details"
+    "tell me more", "continue", "explain again", "what about", "difference", "next question", "more details"
+}
+
+QUESTION_REQUEST_HINTS = {
+    "ask me", "give me a question", "ask me a question", "ask me another question",
+    "quiz me", "test me", "what's the question"
 }
 
 QUESTION_STARTERS = (
@@ -73,22 +87,40 @@ def classify_intent(
     has_pending_question = bool(_last_assistant_question(messages))
     looks_question = _looks_like_question(text)
     looks_answer = _looks_like_answer(text)
+    
+    has_example_hint = any(h in lowered for h in EXAMPLE_HINTS)
+    has_simplify_hint = any(h in lowered for h in SIMPLIFY_HINTS)
     has_followup_hint = any(h in lowered for h in FOLLOWUP_HINTS)
+    has_question_request = any(h in lowered for h in QUESTION_REQUEST_HINTS)
 
+    # 1) User explicitly asks for a question ("ask me a question")
+    if has_question_request and not looks_question:
+        return {"intent": "followup", "user_answer": None}  # Will trigger question generation
+
+    # 2) User explicitly asks for an example
+    if has_example_hint:
+        return {"intent": "followup_example", "user_answer": None}
+
+    # 3) User asks for simplification
+    if has_simplify_hint:
+        if doc_id:
+            return {"intent": "document_question", "user_answer": None}
+        return {"intent": "followup", "user_answer": None}
+
+    # 4) User answers a pending question
     if user_answer_hint and not looks_question:
         return {"intent": "answer", "user_answer": text}
-
-    if doc_id and looks_question:
-        return {"intent": "document_question", "user_answer": None}
 
     if has_pending_question and (looks_answer and not has_followup_hint):
         return {"intent": "answer", "user_answer": text}
 
+    # 5) Other follow-up requests
     if has_followup_hint:
         if doc_id:
             return {"intent": "document_question", "user_answer": None}
         return {"intent": "followup", "user_answer": None}
 
+    # 6) User asks a question
     if looks_question:
         if doc_id:
             return {"intent": "document_question", "user_answer": None}
@@ -96,6 +128,7 @@ def classify_intent(
             return {"intent": "followup", "user_answer": None}
         return {"intent": "new_question", "user_answer": None}
 
+    # 7) User answers pending question (general case)
     if has_pending_question:
         return {"intent": "answer", "user_answer": text}
 

@@ -1,0 +1,48 @@
+{
+  "_comments": {
+    "backend.host":                       "Backend server host. Use 127.0.0.1 for local dev",
+    "backend.port":                       "Backend server port. Default: 8001",
+    "backend.local_model_base_url":       "Local Ollama/OpenAI-compatible endpoint URL",
+    "backend.provider_base_urls":         "Base URLs for each supported model provider",
+    "backend.safety_strict_mode":         "Safety: true = refuse age-inappropriate content, false = rewrite it instead",
+    "backend.log_level":                  "Logging verbosity: DEBUG | INFO | WARNING | ERROR",
+    "backend.http_log_skip_path_prefixes":"Comma-separated URL prefixes to skip from HTTP logs. e.g. /audio/,/health/",
+    "backend.hf_hub_disable_progress_bars":"HuggingFace: 1 = hide download progress bars, 0 = show them",
+    "backend.transformers_verbosity":     "HuggingFace Transformers log level: debug | info | warning | error",
+    "backend.cors_origins":               "Allowed frontend origins. Add production URL here when deploying e.g. https://myapp.com",
+    "backend.cors_credentials":           "Allow cookies/auth headers in CORS. Must be true when cors_origins is not *",
+    "backend.cors_methods":               "Allowed HTTP methods for CORS requests",
+    "backend.cors_headers":               "Allowed request headers. * means all",
+    "backend.cors_expose_headers":        "Response headers the frontend JS can read",
+    "frontend.chat_retention_hours":      "Hours to keep chat history in browser. 0 = no retention",
+    "frontend.dev_port":                  "Vite local dev server port"
+  },
+  "backend": {
+    "host": "127.0.0.1",
+    "port": 8001,
+    "local_model_base_url": "http://localhost:11434",
+    "provider_base_urls": {
+      "openai": "https://api.openai.com/v1",
+      "gemini": "https://generativelanguage.googleapis.com/v1beta",
+      "claude": "https://api.anthropic.com/v1",
+      "copilot": "https://models.inference.ai.azure.com"
+    },
+    "safety_strict_mode": true,
+    "log_level": "INFO",
+    "http_log_skip_path_prefixes": "/audio/",
+    "hf_hub_disable_progress_bars": "1",
+    "transformers_verbosity": "error",
+    "cors_origins": [
+      "http://127.0.0.1:8501",
+      "http://localhost:8501"
+    ],
+    "cors_credentials": true,
+    "cors_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "cors_headers": ["*"],
+    "cors_expose_headers": ["X-Request-Id"]
+  },
+  "frontend": {
+    "chat_retention_hours": 24,
+    "dev_port": 8501
+  }
+}

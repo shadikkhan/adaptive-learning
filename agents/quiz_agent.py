@@ -46,6 +46,20 @@ def _parse_quiz_response(response: str):
 
     return None
 
+def _quiz_character_style(character: str) -> str:
+    """Generate quiz style guidance based on character."""
+    styles = {
+        "Friendly Teacher": "Create encouraging, confidence-building questions.",
+        "Stern Professor": "Create rigorous, challenging academic questions.",
+        "Curious Scientist": "Create investigative questions about mechanisms and why.",
+        "Pirate": "Create fun, adventurous-themed questions.",
+        "Doctor": "Create health-related context questions.",
+        "Comedian": "Create entertaining, clever questions with wit.",
+        "Storyteller": "Create narrative-framed, imaginative questions.",
+    }
+    return styles.get(character, styles["Friendly Teacher"])
+
+
 def quiz_agent(state: ExplainState):
     learner = state.get("learner", {})
     age = learner["age"]
@@ -53,12 +67,17 @@ def quiz_agent(state: ExplainState):
     profession = (learner.get("profession") or "").strip()
     expertise_level = (learner.get("expertise_level") or "").strip()
     area_of_interest = (learner.get("area_of_interest") or "").strip()
+    character = (learner.get("character") or "Friendly Teacher").strip()
+    quiz_style = _quiz_character_style(character)
     explanation = state.get("simplified_explanation") or ""
     # explanation = state.get("explanation") or state.get("simplified_explanation", "")
     num_of_questions = int(state.get("num_of_questions") or 5)
     
     prompt = f"""
                 Generate {num_of_questions} multiple-choice quiz questions based on "{explanation}" for a learner aged {age} and Difficulty: {DIFFICULTY_MAP.get(difficulty, DIFFICULTY_MAP['medium'])} .
+
+                Character/Personality: {character}
+                Question Style: {quiz_style}
 
                 Learner profile:
                 - Profession: {profession or 'Not provided'}

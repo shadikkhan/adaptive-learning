@@ -72,6 +72,7 @@ graph.add_conditional_edges(
         "document_question": "retrieve_doc",  # fallback (should not occur after above)
         "new_question": "simplify",
         "followup": "simplify",
+        "followup_example": "generate_example",
     }
 )
 
@@ -82,7 +83,7 @@ graph.add_edge("retrieve_doc", "simplify")
 
 def _route_after_simplify(state):
     intent = state.get("intent")
-    if intent not in ["document_question", "new_question", "followup"]:
+    if intent not in ["document_question", "new_question", "followup", "followup_example"]:
         return "skip"
     if state.get("include_examples", True):
         return "with_example"

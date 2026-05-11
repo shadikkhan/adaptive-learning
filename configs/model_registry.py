@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
 
+from configs import config
+
 
 @dataclass(frozen=True)
 class ProviderPreset:
@@ -18,35 +20,35 @@ _PROVIDER_PRESETS: Dict[str, ProviderPreset] = {
         key="local",
         runtime_provider="ollama",
         default_model="llama3.1:8b",
-        base_url="http://localhost:11434",
+        base_url=config.LOCAL_MODEL_BASE_URL,
         requires_api_key=False, 
     ),
     "openai": ProviderPreset(
         key="openai",
         runtime_provider="openai",
         default_model="gpt-4o-mini",
-        base_url="https://api.openai.com/v1",
+        base_url=config.OPENAI_BASE_URL,
         requires_api_key=True,
     ),
     "gemini": ProviderPreset(
         key="gemini",
         runtime_provider="openai",
         default_model="gemini-2.5-flash-lite",
-        base_url="https://generativelanguage.googleapis.com/v1beta",
+        base_url=config.GEMINI_BASE_URL,
         requires_api_key=True,
     ),
     "claude": ProviderPreset(
         key="claude",
         runtime_provider="anthropic",
         default_model="claude-sonnet-4-6",
-        base_url="https://api.anthropic.com/v1",
+        base_url=config.CLAUDE_BASE_URL,
         requires_api_key=True,
     ),
     "copilot": ProviderPreset(
         key="copilot",
         runtime_provider="openai",
         default_model="gpt-4.1",
-        base_url="https://models.inference.ai.azure.com",
+        base_url=config.COPILOT_BASE_URL,
         requires_api_key=True,
     ),
 }
