@@ -72,6 +72,14 @@ adaptive-learning/
 
 ---
 
+---
+
+## Agents Flow
+
+![Agents Graph](./agent_graph.png)
+
+---
+
 ## Prerequisites
 
 | Requirement | Version |
