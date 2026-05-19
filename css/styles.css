@@ -197,13 +197,33 @@ section[data-testid="stMain"] > div:first-child {
 }
 
 .block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div {
-  padding: 14px 14px 12px !important;
-  overflow-y: auto !important;
+  padding: 14px 10px 18px 12px !important;
+  overflow-y: scroll !important;
   height: 100% !important;
   min-height: 0 !important;
   background: var(--panel-soft) !important;
   display: flex !important;
   flex-direction: column !important;
+  gap: 8px !important;
+  scroll-behavior: smooth !important;
+}
+
+/* Custom scrollbar for right panel */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div::-webkit-scrollbar {
+  width: 8px !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div::-webkit-scrollbar-track {
+  background: rgba(107, 127, 143, 0.1) !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div::-webkit-scrollbar-thumb {
+  background: rgba(107, 127, 143, 0.4) !important;
+  border-radius: 4px !important;
+}
+
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 127, 143, 0.6) !important;
 }
 
 /* Remove Streamlit default vertical gaps inside the main panels */
@@ -215,9 +235,22 @@ section[data-testid="stMain"] > div:first-child {
   width: 100% !important;
 }
 
+/* Right panel — force scrolling on inner vertical block */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
 .block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"] > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] > [data-testid="element-container"] {
   margin: 0 !important;
   width: 100% !important;
+  flex-shrink: 0 !important;
+}
+
+/* Right panel — ensure element containers don't prevent scrolling */
+.block-container > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) > div > [data-testid="stVerticalBlockBorderWrapper"] > div > [data-testid="stVerticalBlock"] > [data-testid="element-container"] {
+  overflow: visible !important;
+  min-height: auto !important;
 }
 
 /* Center message area: strip nested border, allow messages to expand */
@@ -277,24 +310,24 @@ section[data-testid="stMain"] > div:first-child {
 [data-testid="column"]:nth-child(3) .stSlider { margin: 0 0 3px !important; }
 [data-testid="column"]:nth-child(3) .stCheckbox { margin: 0 !important; padding: 0 !important; }
 [data-testid="column"]:nth-child(3) .stWidgetLabel p {
-  font-size: .74rem !important; font-weight: 600 !important; color: #0f1722 !important;
+  font-size: .70rem !important; font-weight: 600 !important; color: #0f1722 !important;
   margin: 0 0 1px !important; line-height: 1.15 !important;
 }
 [data-testid="column"]:nth-child(3) [data-baseweb="select"] > div:first-child,
 [data-testid="column"]:nth-child(3) .stTextInput input {
   border-radius: 8px !important; border: 1px solid #b9c8cf !important; background: #fff !important;
-  font-size: .76rem !important; color: #2a3b49 !important;
-  min-height: 30px !important; max-height: 30px !important; font-family: 'Manrope', sans-serif !important;
+  font-size: .72rem !important; color: #2a3b49 !important;
+  min-height: 28px !important; max-height: 28px !important; font-family: 'Manrope', sans-serif !important;
 }
 [data-testid="column"]:nth-child(3) [data-testid="stHorizontalBlock"] {
   gap: 6px !important; margin: 0 !important; padding: 0 !important; height: auto !important; min-height: unset !important;
 }
 [data-testid="column"]:nth-child(3) .stButton > button {
-  border-radius: 9px !important; font-size: .74rem !important; font-weight: 700 !important;
+  border-radius: 9px !important; font-size: .70rem !important; font-weight: 700 !important;
   padding: 4px 8px !important; border: 1px solid #b9c8cf !important;
   background: #f6fafb !important; color: #0f1722 !important;
   box-shadow: none !important; width: 100% !important;
-  min-height: 28px !important; height: 28px !important; margin: 0 0 2px !important;
+  min-height: 26px !important; height: 26px !important; margin: 0 0 1px !important;
   font-family: 'Manrope', sans-serif !important;
 }
 [data-testid="column"]:nth-child(3) [data-testid="stSpinner"] p {

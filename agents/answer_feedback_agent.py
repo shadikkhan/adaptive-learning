@@ -447,6 +447,20 @@ from configs.models import ExplainState
 from configs.config import llm
 from services.json_logger import log_event
 
+def _feedback_character_style(character: str) -> str:
+    """Generate feedback style based on character."""
+    styles = {
+        "Friendly Teacher": "warm and encouraging",
+        "Stern Professor": "rigorous and analytical",
+        "Curious Scientist": "investigative and mechanistic",
+        "Pirate": "adventurous and fun",
+        "Doctor": "clinical and health-focused",
+        "Comedian": "witty and humorous",
+        "Storyteller": "narrative-driven and vivid",
+    }
+    return styles.get(character, styles["Friendly Teacher"])
+
+
 def answer_feedback_agent(state: ExplainState):
     user_answer = (state.get("user_answer") or "").strip()
     learner = state.get("learner", {})
@@ -454,6 +468,8 @@ def answer_feedback_agent(state: ExplainState):
     profession = (learner.get("profession") or "").strip()
     expertise_level = (learner.get("expertise_level") or "").strip()
     area_of_interest = (learner.get("area_of_interest") or "").strip()
+    character = (learner.get("character") or "Friendly Teacher").strip()
+    feedback_style = _feedback_character_style(character)
     score = state.get("score")
 
     # ✅ Extract MOST RECENT question from assistant messages
@@ -468,6 +484,7 @@ def answer_feedback_agent(state: ExplainState):
     log_event(
         "answer_feedback_agent.context",
         age=age,
+        character=character,
         profession=profession or "<none>",
         expertise_level=expertise_level or "<none>",
         area_of_interest=area_of_interest or "<none>",
@@ -482,7 +499,8 @@ def answer_feedback_agent(state: ExplainState):
     idk_phrases = ["i don't know", "i do not know", "no idea", "i have no idea", "dont know", "don't know", "idk", "not sure", "no clue"]
     if any(p in user_answer.lower() for p in idk_phrases):
         reveal_prompt = f"""
-You are a friendly tutor for a learner aged {age}.
+You are a {feedback_style} tutor for a learner aged {age}.
+Character: {character}
 
 Learner profile: profession={profession or "Not provided"}, expertise={expertise_level or "Not provided"}, interest={area_of_interest or "Not provided"}
 
@@ -491,6 +509,7 @@ The learner said they don't know the answer to this question:
 
 Give the correct answer in 1-2 simple, encouraging sentences.
 Do NOT say "Not quite right". Start with "That's okay!"
+Maintain the {character} character style in your response.
 """.strip()
         try:
             reveal = (llm.invoke(reveal_prompt) or "").strip()
@@ -501,6 +520,7 @@ Do NOT say "Not quite right". Start with "That's okay!"
     # ✅ Dynamic prompt (works for any topic, age-aware)
     prompt = f"""
 You are a careful tutor for a learner aged {age}.
+Feedback style: {feedback_style} (character: {character})
 
 Question: {question}
 Learner answer: {user_answer}

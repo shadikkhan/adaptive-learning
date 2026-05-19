@@ -63,7 +63,7 @@ class OpenAICompatibleLLM:
             raise ValueError("API key is required for OpenAI-compatible providers")
         self.model = model or "gpt-4o-mini"
         self.api_key = _normalize_api_key(api_key or "")
-        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self.base_url = (base_url or resolve_provider_preset("openai").base_url).rstrip("/")
         self.temperature = temperature
         self.fallback_models = [m for m in (fallback_models or []) if m]
         self.auth_style = auth_style
@@ -202,7 +202,7 @@ class GeminiLLM:
             raise ValueError("API key is required for Gemini provider")
         self.model = model or "gemini-2.5-flash"
         self.api_key = _normalize_api_key(api_key)
-        raw_base = (base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+        raw_base = (base_url or resolve_provider_preset("gemini").base_url).rstrip("/")
         # Accept old /openai base URLs and normalize to native v1beta root.
         self.base_url = raw_base[:-7] if raw_base.endswith("/openai") else raw_base
         self.temperature = temperature
@@ -290,7 +290,7 @@ class AnthropicLLM:
             raise ValueError("API key is required for Anthropic provider")
         self.model = model or "claude-sonnet-4-6"
         self.api_key = api_key.strip()
-        self.base_url = (base_url or "https://api.anthropic.com/v1").rstrip("/")
+        self.base_url = (base_url or resolve_provider_preset("claude").base_url).rstrip("/")
         self.temperature = temperature
 
     @staticmethod
@@ -362,8 +362,8 @@ class AnthropicLLM:
                 raise RuntimeError(f"Unable to reach model endpoint: {exc.reason}") from exc
             except Exception as exc:
                 elapsed_ms = int((time.perf_counter() - started) * 1000)
-                log_event("model_provider.anthropic.parse_error", level="ERROR", model=model_name, elapsed_ms=elapsed_ms)
-                raise RuntimeError("Invalid response format from Anthropic provider") from exc
+                log_event("model_provider.anthropic.parse_error", level="ERROR", model=model_name, elapsed_ms=elapsed_ms, error=str(exc), error_type=type(exc).__name__)
+                raise RuntimeError(f"Anthropic response parsing failed: {type(exc).__name__}: {str(exc)}") from exc
 
         if last_error:
             raise last_error

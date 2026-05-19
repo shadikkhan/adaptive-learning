@@ -82,6 +82,9 @@ def safety_agent(state: ExplainState):
 
         # Do not break the entire SSE stream: attempt to rewrite if it's complexity-only.
         if _looks_like_complexity_flag(verdict) and explanation:
+            rewritten = None
+            
+            # ATTEMPT 1: Standard simplification
             simplify_prompt = f"""
 Rewrite the explanation below for a {age}-year-old.
 - Keep it accurate and concise.
@@ -102,6 +105,28 @@ Explanation:
                     }
             except Exception:
                 pass
+            
+            # ATTEMPT 2: More aggressive simplification (only if attempt 1 failed)
+            if not rewritten:
+                aggressive_prompt = f"""
+Rewrite VERY simply for a {age}-year-old using ONLY basic everyday words.
+- Use short simple sentences.
+- Remove ALL technical terms.
+- Use analogies to common things.
+Return only the very simple version.
+
+Explanation:
+{explanation}
+""".strip()
+                try:
+                    rewritten = llm.invoke(aggressive_prompt).strip()
+                    if rewritten:
+                        return {
+                            "safety_checked_text": combined,
+                            "safe_text": rewritten,
+                        }
+                except Exception:
+                    pass
 
         safe_fallback = (
             f"I can explain this in a simpler and safer way for age {age}. "

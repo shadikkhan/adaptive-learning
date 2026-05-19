@@ -30,6 +30,10 @@ AREA_OPTIONS = sorted([
     "Engineering","Finance","Healthcare","Law & Policy","Environment","Society & Community",
     "Sports","Soccer","Cricket","Basketball","Music & Arts","Movies & Storytelling","Gaming","Research",
 ])
+CHARACTER_OPTIONS = [
+    "Friendly Teacher", "Stern Professor", "Curious Scientist", "Pirate",
+    "Doctor", "Comedian", "Storyteller", "Custom",
+]
 ENABLE_LOCAL = os.getenv("ENABLE_LOCAL_PROVIDER","true").strip().lower() in {"1","true","yes","on"}
 PROVIDERS = ["claude","copilot","gemini","openai"]
 if ENABLE_LOCAL: PROVIDERS.insert(3,"local")
@@ -38,8 +42,9 @@ PLABELS = {"claude":"Claude","copilot":"Copilot","gemini":"Gemini","local":"Loca
 def _init():
     D = dict(chats=[],active_chat_id=None,last_question="",age=10,
              profession="Student",expertise_level="Beginner",area_of_interest="General",
-             include_examples=False,include_questions=False,model_provider="claude",
-             _model_provider_selected="claude",
+             character="Friendly Teacher",custom_character="",
+             include_examples=False,include_questions=False,model_provider="local",
+             _model_provider_selected="local",
              model_api_key="",model_validation_result=None,selected_pack="",
              _api_keys_by_provider={},
              quiz_difficulty="medium",_ic=0,_upload_done=set(),
@@ -51,6 +56,13 @@ def _init():
     for k,v in D.items():
         if k not in st.session_state: st.session_state[k]=v
 _init()
+
+def _resolved_character() -> str:
+    c = (st.session_state.get("character") or "Friendly Teacher").strip()
+    if c == "Custom":
+        custom = (st.session_state.get("custom_character") or "").strip()
+        return custom or "Friendly Teacher"
+    return c or "Friendly Teacher"
 
 def _chat():
     cid=st.session_state.active_chat_id
@@ -249,6 +261,27 @@ def _chat_context_for_stream(chat):
             lines.append(f"Feedback: {secs['Feedback']}")
     return "\n\n".join(lines)
 
+def _extract_last_question_from_context(context_text: str) -> str:
+    context = (context_text or "")
+    marker = "Question:"
+    if marker not in context:
+        return ""
+    question = context.rsplit(marker, 1)[1].strip()
+    for stop in ["\nUser:", "\nExplanation:", "\nExample:", "\nFeedback:"]:
+        if stop in question:
+            question = question.split(stop, 1)[0].strip()
+    return question
+
+def _looks_like_answer_input(text: str) -> bool:
+    value = (text or "").strip().lower()
+    if not value:
+        return False
+    if value.endswith("?"):
+        return False
+    if re.match(r"^(because|i think|it is|it was|they are|they were|yes|no|my answer|answer:)\\b", value):
+        return True
+    return len(value.split()) <= 18
+
 def _resolve_audio_event_path(audio_url):
     url = (audio_url or "").strip()
     if not url:
@@ -339,6 +372,7 @@ def call_explain_stream(topic, **kw):
         profession=st.session_state.profession,
         expertise_level=st.session_state.expertise_level,
         area_of_interest=st.session_state.area_of_interest,
+        character=_resolved_character(),
         include_examples=bool(st.session_state.get("_pending_include_examples", st.session_state.get("include_examples", False))),
         include_questions=bool(st.session_state.get("_pending_include_questions", st.session_state.get("include_questions", False))),
         force_new_topic=bool(kw.get("force_new_topic", False)),
@@ -407,6 +441,7 @@ def call_explain(topic, **kw):
             "profession": st.session_state.profession,
             "expertise_level": st.session_state.expertise_level,
             "area_of_interest": st.session_state.area_of_interest,
+            "character": _resolved_character(),
         },
         "intent": "new_question",
         "doc_id": kw.get("doc_id"),
@@ -450,6 +485,7 @@ def call_upload(fb, fn, **kw):
             profession=st.session_state.profession,
             expertise_level=st.session_state.expertise_level,
             area_of_interest=st.session_state.area_of_interest,
+            character=_resolved_character(),
         )
         return {"doc_id": doc_id, "filename": fn, "summary": summary}
     extracted, parser = extract_document_text(fn, "", fb)
@@ -461,6 +497,7 @@ def call_upload(fb, fn, **kw):
         profession=st.session_state.profession,
         expertise_level=st.session_state.expertise_level,
         area_of_interest=st.session_state.area_of_interest,
+        character=_resolved_character(),
     )
     doc_id = str(uuid.uuid4())
     save_document(doc_id, fn, cleaned, parser, content_hash=content_hash)
@@ -479,6 +516,7 @@ def call_quiz(topic, num, **kw):
         profession=st.session_state.profession,
         expertise_level=st.session_state.expertise_level,
         area_of_interest=st.session_state.area_of_interest,
+        character=_resolved_character(),
         llm_config=_llm_request_config(),
     )
     data = _run_async(generate_quiz(req)) or {}
@@ -507,6 +545,9 @@ def do_send(text,force_fresh=False,live_target=None):
     if e: chat["messages"].append({"role":"assistant","error":e,"sections":None}); return
     if force_fresh: st.session_state.last_question=""; chat["topic"]=text
     chat["messages"].append({"role":"user","text":text})
+    context_text = _chat_context_for_stream(chat)
+    pending_question = "" if force_fresh else _extract_last_question_from_context(context_text)
+    user_answer_hint = text if (pending_question and _looks_like_answer_input(text)) else None
     live_box = live_target or st.container()
     live_placeholders = {}
     with live_box:
@@ -521,8 +562,10 @@ def do_send(text,force_fresh=False,live_target=None):
             s, audio_path = call_explain_stream(
                 topic=text,
                 age=st.session_state.age,
+                context=context_text,
                 doc_id=chat.get("doc_id"),
                 chat=chat,
+                user_answer=user_answer_hint,
                 force_new_topic=force_fresh,
                 on_update=lambda sections: _render_live_sections(live_placeholders, sections),
             )
@@ -678,6 +721,40 @@ def _inject_js():
       }
     });
   }
+
+    /* ── 5. Keep right panel vertically scrollable ── */
+    function fixRightPanelScroll(){
+        var D=getDoc();
+        var cols=D.querySelectorAll('[data-testid="column"]');
+        if(!cols[2]) return;
+
+        var rightCol=cols[2];
+        var card=rightCol.querySelector('[data-testid="stVerticalBlockBorderWrapper"]');
+        if(!card) return;
+
+        var content=card.querySelector(':scope > div');
+        if(!content) return;
+
+        content.style.overflowY='scroll';
+        content.style.overflowX='hidden';
+        content.style.minHeight='0';
+        content.style.height='100%';
+        content.style.paddingBottom='18px';
+        content.style.scrollbarGutter='stable';
+
+        // Prevent nested Streamlit wrappers from forcing a clipped fixed-height block.
+        var vb=content.querySelector(':scope > [data-testid="stVerticalBlock"]');
+        if(vb){
+            vb.style.minHeight='fit-content';
+            vb.style.height='auto';
+            vb.style.overflow='visible';
+        }
+
+        rightCol.querySelectorAll('[data-testid="element-container"]').forEach(function(el){
+            el.style.flexShrink='0';
+            el.style.minHeight='auto';
+        });
+    }
 
 
     /* ── 3. Composer action buttons row — left attach + right grouped quiz/mic/send ── */
@@ -895,6 +972,7 @@ def _inject_js():
         fixNewChat();
         fixComposerBtns();
         fixChatGaps();
+        fixRightPanelScroll();
     }
 
   // Run immediately, then at intervals to catch rerenders
@@ -1024,9 +1102,21 @@ def render_msg(msg,idx):
 def render_quiz_setup(chat):
     docs=chat.get("docs") or ([{"doc_id":chat["doc_id"],"filename":"Uploaded document"}] if chat.get("doc_id") else [])
     is_doc=bool(docs)
+    if docs and not chat.get("quiz_doc_id"):
+        chat["quiz_doc_id"] = docs[-1]["doc_id"]
     st.markdown('<h2 style="margin:0 0 12px;font-size:1rem;font-weight:700;color:#0f1722">📝 Quiz Setup</h2>',unsafe_allow_html=True)
     if is_doc:
         st.caption("Questions from uploaded document.")
+        if len(docs) > 1:
+            doc_labels = {d["doc_id"]: d.get("filename") or "Uploaded document" for d in docs}
+            selected_doc = st.selectbox(
+                "Select document",
+                options=[d["doc_id"] for d in docs],
+                index=[d["doc_id"] for d in docs].index(chat.get("quiz_doc_id")) if chat.get("quiz_doc_id") in [d["doc_id"] for d in docs] else len(docs)-1,
+                format_func=lambda did: doc_labels.get(did, "Uploaded document"),
+                key="qs_doc_select",
+            )
+            chat["quiz_doc_id"] = selected_doc
         qt=st.text_input("Focus area (optional)",value=chat.get("quiz_topic",""),key="qs_topic")
     else:
         qt=st.text_input("Quiz Topic *",value=chat.get("quiz_topic",""),placeholder="e.g. photosynthesis, planets",key="qs_topic")
@@ -1044,6 +1134,12 @@ def render_quiz_setup(chat):
     st.selectbox("Expertise",["Beginner","Intermediate","Advanced"],index=["Beginner","Intermediate","Advanced"].index(st.session_state.expertise_level) if st.session_state.expertise_level in ["Beginner","Intermediate","Advanced"] else 0,key="qs_expertise")
     st.session_state.expertise_level=st.session_state.qs_expertise
     st.selectbox("Example Context",AREA_OPTIONS,index=AREA_OPTIONS.index(st.session_state.area_of_interest) if st.session_state.area_of_interest in AREA_OPTIONS else 0,key="qs_area")
+    st.session_state.area_of_interest=st.session_state.qs_area
+    st.selectbox("Character/Personality",CHARACTER_OPTIONS,index=CHARACTER_OPTIONS.index(st.session_state.character) if st.session_state.character in CHARACTER_OPTIONS else 0,key="qs_character")
+    st.session_state.character=st.session_state.qs_character
+    if st.session_state.character == "Custom":
+        st.text_area("Custom character",key="qs_custom_character",placeholder="Describe personality/style")
+        st.session_state.custom_character = st.session_state.qs_custom_character
     can=is_doc or bool((chat.get("quiz_topic") or "").strip())
     c1,c2=st.columns(2)
     with c1:
@@ -1182,6 +1278,9 @@ def render_right():
     st.selectbox("Profession",PROFESSION_OPTIONS,key="profession",label_visibility="visible")
     st.selectbox("Expertise Level",["Beginner","Intermediate","Advanced"],key="expertise_level",label_visibility="visible")
     st.selectbox("Example Context",AREA_OPTIONS,key="area_of_interest",label_visibility="visible")
+    st.selectbox("Character/Personality",CHARACTER_OPTIONS,key="character",label_visibility="visible")
+    if st.session_state.character == "Custom":
+        st.text_area("Custom character",key="custom_character",placeholder="Describe personality/style")
     st.markdown('<p style="font-size:.70rem;color:#6b7d8c;margin:0 0 3px;font-style:italic">Examples only; topic facts unchanged.</p>',unsafe_allow_html=True)
     H("Output")
     c1,c2=st.columns(2,gap="small")

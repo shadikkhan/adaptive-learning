@@ -7,6 +7,7 @@ class LearnerProfile(TypedDict):
     profession: Optional[str]
     expertise_level: Optional[str]
     area_of_interest: Optional[str]
+    character: Optional[str]
     
 class Message(TypedDict):
     role: Literal["user", "assistant", "system"]

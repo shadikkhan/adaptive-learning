@@ -50,6 +50,7 @@ def build_summary_prompt(
     profession: str = "",
     expertise_level: str = "",
     area_of_interest: str = "",
+    character: str = "Friendly Teacher",
 ) -> str:
     trimmed_text = text[:MAX_SUMMARY_CHARS]
 
@@ -60,7 +61,8 @@ def build_summary_prompt(
         "Learner profile:\n"
         f"- Profession: {profession or 'Not provided'}\n"
         f"- Expertise level: {expertise_level or 'Not provided'}\n"
-        f"- Area of interest: {area_of_interest or 'Not provided'}"
+        f"- Area of interest: {area_of_interest or 'Not provided'}\n"
+        f"- Character/Style: {character or 'Friendly Teacher'}"
     )
 
     return f"""
@@ -105,6 +107,7 @@ def summarize_with_fallback(
     profession: str = "",
     expertise_level: str = "",
     area_of_interest: str = "",
+    character: str = "Friendly Teacher",
 ) -> Tuple[str, str]:
     """Try LLM summary first; fall back to extractive summary if LLM is unavailable.
 
@@ -118,6 +121,7 @@ def summarize_with_fallback(
         profession=profession,
         expertise_level=expertise_level,
         area_of_interest=area_of_interest,
+        character=character,
     )
     try:
         if len(text) > MAX_SUMMARY_CHARS:
@@ -129,6 +133,7 @@ def summarize_with_fallback(
                 profession=profession,
                 expertise_level=expertise_level,
                 area_of_interest=area_of_interest,
+                character=character,
             )
         else:
             summary = llm.invoke(prompt).strip()
@@ -152,6 +157,7 @@ def _summarize_long_document(
     profession: str = "",
     expertise_level: str = "",
     area_of_interest: str = "",
+    character: str = "Friendly Teacher",
 ) -> str:
     chunks = _chunk_text(text, MAP_CHUNK_CHARS, MAX_MAP_CHUNKS)
     partials: List[str] = []
@@ -162,7 +168,8 @@ def _summarize_long_document(
         "Learner profile:\n"
         f"- Profession: {profession or 'Not provided'}\n"
         f"- Expertise level: {expertise_level or 'Not provided'}\n"
-        f"- Area of interest: {area_of_interest or 'Not provided'}"
+        f"- Area of interest: {area_of_interest or 'Not provided'}\n"
+        f"- Character/Style: {character or 'Friendly Teacher'}"
     )
 
     for idx, chunk in enumerate(chunks, start=1):
@@ -203,12 +210,12 @@ Chunk text:
                 profession=profession,
                 expertise_level=expertise_level,
                 area_of_interest=area_of_interest,
+                character=character,
             )
         ).strip()
 
     output_format = _format_spec_text(template, age)
 
-    partials_text = "\n\n".join(partials)
     reduce_prompt = f"""
 You are AgeXplain, an age-adaptive tutor.
 
@@ -231,7 +238,7 @@ Rules:
 {quality_rules}
 
 Chunk summaries:
-{partials_text}
+{'\n\n'.join(partials)}
 """.strip()
 
     return llm.invoke(reduce_prompt).strip()

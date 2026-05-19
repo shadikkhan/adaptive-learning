@@ -426,6 +426,7 @@ class ExplainRequest(BaseModel):
     profession: Optional[str] = None
     expertise_level: Optional[str] = None
     area_of_interest: Optional[str] = None
+    character: Optional[str] = None
     include_examples: bool = True
     include_questions: bool = True
     force_new_topic: bool = False
@@ -454,6 +455,7 @@ class QuizGenerateRequest(BaseModel):
     profession: Optional[str] = None
     expertise_level: Optional[str] = None
     area_of_interest: Optional[str] = None
+    character: Optional[str] = None
     client_trace_id: Optional[str] = None
     llm_config: Optional[ModelConfigRequest] = None
     client_model_config: Optional[ModelConfigRequest] = Field(None, alias="model_config")
@@ -468,6 +470,7 @@ class DocumentSummaryRequest(BaseModel):
     profession: Optional[str] = None
     expertise_level: Optional[str] = None
     area_of_interest: Optional[str] = None
+    character: Optional[str] = None
     client_trace_id: Optional[str] = None
     llm_config: Optional[ModelConfigRequest] = None
 
@@ -476,6 +479,7 @@ class DocumentAskRequest(BaseModel):
     doc_id: str
     question: str
     age: int
+    character: Optional[str] = None
     client_trace_id: Optional[str] = None
     profession: Optional[str] = None
     expertise_level: Optional[str] = None
@@ -535,7 +539,7 @@ def _explain_request_summary(request: ExplainRequest) -> str:
         f"topic={request.topic!r} topic_chars={len(request.topic or '')} "
         f"age={request.age} doc_id={request.doc_id} "
         f"profession={request.profession!r} expertise_level={request.expertise_level!r} "
-        f"area_of_interest={request.area_of_interest!r} "
+        f"area_of_interest={request.area_of_interest!r} character={request.character!r} "
         f"include_examples={request.include_examples} include_questions={request.include_questions} "
         f"force_new_topic={request.force_new_topic} context_chars={len(request.context or '')} "
         f"user_answer_present={bool((request.user_answer or '').strip())} "
@@ -548,7 +552,7 @@ def _quiz_request_summary(request: QuizGenerateRequest) -> str:
         f"topic={request.topic!r} age={request.age} num_questions={request.num_questions} "
         f"difficulty={request.difficulty} doc_id={request.doc_id} "
         f"profession={request.profession!r} expertise_level={request.expertise_level!r} "
-        f"area_of_interest={request.area_of_interest!r} "
+        f"area_of_interest={request.area_of_interest!r} character={request.character!r} "
         f"client_trace_id={request.client_trace_id or '<none>'}"
     )
 
@@ -563,6 +567,8 @@ def _validate_request_summary(request: ValidateModelRequest) -> str:
 def _doc_summary_request_summary(request: DocumentSummaryRequest) -> str:
     return (
         f"doc_id={request.doc_id} age={request.age} "
+        f"profession={request.profession!r} expertise_level={request.expertise_level!r} "
+        f"area_of_interest={request.area_of_interest!r} character={request.character!r} "
         f"client_trace_id={request.client_trace_id or '<none>'}"
     )
 
@@ -571,7 +577,8 @@ def _doc_ask_request_summary(request: DocumentAskRequest) -> str:
     return (
         f"doc_id={request.doc_id} age={request.age} question_chars={len(request.question or '')} "
         f"profession={request.profession!r} expertise_level={request.expertise_level!r} "
-        f"area_of_interest={request.area_of_interest!r} include_examples={request.include_examples} "
+        f"area_of_interest={request.area_of_interest!r} character={request.character!r} "
+        f"include_examples={request.include_examples} "
         f"include_questions={request.include_questions} client_trace_id={request.client_trace_id or '<none>'}"
     )
 
@@ -629,6 +636,7 @@ async def generate_quiz(request: QuizGenerateRequest):
         profession=request.profession or "<none>",
         expertise_level=request.expertise_level or "<none>",
         area_of_interest=request.area_of_interest or "<none>",
+        character=request.character or "<none>",
         client_trace_id=request.client_trace_id or "<none>",
         **_llm_cfg_fields(llm_cfg),
     )
@@ -638,11 +646,13 @@ async def generate_quiz(request: QuizGenerateRequest):
         profession = (request.profession or "").strip()
         expertise_level = (request.expertise_level or "").strip()
         area_of_interest = (request.area_of_interest or "").strip()
+        character = (request.character or "Friendly Teacher").strip()
         learner_profile = (
             "Learner profile:\n"
             f"- Profession: {profession or 'Not provided'}\n"
             f"- Expertise level: {expertise_level or 'Not provided'}\n"
-            f"- Area of interest: {area_of_interest or 'Not provided'}"
+            f"- Area of interest: {area_of_interest or 'Not provided'}\n"
+            f"- Character/Style: {character or 'Friendly Teacher'}"
         )
         interest_rule = (
             f"12. If helpful, lightly frame wording/examples using '{area_of_interest}' as a familiar context, "
@@ -812,13 +822,21 @@ Continue for all {request.num_questions} questions."""
             grounded = [q for q in questions if _is_doc_grounded_question(q, source_blocks)]
             questions = grounded
 
-            # If we are missing items, run one focused retry generation before using deterministic fallback.
+            # If we are missing items, run up to two focused retry generations before using deterministic fallback.
             if len(questions) < request.num_questions:
-                missing = request.num_questions - len(questions)
-                existing_q_text = "\n".join(
-                    f"- {q.get('question', '')}" for q in questions if q.get("question")
-                )
-                retry_prompt = f"""Generate exactly {missing} additional multiple-choice quiz questions from the source passages below.
+                for retry_attempt in range(2):  # Two retry attempts
+                    if len(questions) >= request.num_questions:
+                        break
+                    
+                    missing = request.num_questions - len(questions)
+                    existing_q_text = "\n".join(
+                        f"- {q.get('question', '')}" for q in questions if q.get("question")
+                    )
+                    
+                    # Adjust prompt based on retry attempt
+                    if retry_attempt == 0:
+                        # ATTEMPT 1: Standard retry with full rules
+                        retry_prompt = f"""Generate exactly {missing} additional multiple-choice quiz questions from the source passages below.
 
 Topic: {request.topic}
 Difficulty: {difficulty_level}
@@ -854,26 +872,52 @@ D) [Option]
 Correct: [A, B, C, or D]
 Explanation: [Grounded supporting sentence]
 """
-                try:
-                    retry_raw = await asyncio.wait_for(
-                        asyncio.to_thread(runtime_llm.invoke, retry_prompt),
-                        timeout=max(20, QUIZ_GENERATION_TIMEOUT_SECONDS // 2),
-                    )
-                    retry_text = _normalize_ocr_quiz_text((retry_raw or "").strip())
-                    retry_questions = _parse_quiz_response(retry_text, missing)
-                    retry_questions = [_sanitize_quiz_question(q) for q in retry_questions]
-                    retry_grounded = [q for q in retry_questions if _is_doc_grounded_question(q, source_blocks)]
+                    else:
+                        # ATTEMPT 2: Simpler approach with fewer constraints
+                        retry_prompt = f"""Generate {missing} quiz questions from these passages about "{request.topic}".
 
-                    seen = {_normalize_for_match(q.get("question", "")) for q in questions}
-                    for q in retry_grounded:
-                        key = _normalize_for_match(q.get("question", ""))
-                        if key and key not in seen:
-                            questions.append(q)
-                            seen.add(key)
-                            if len(questions) >= request.num_questions:
-                                break
-                except Exception as retry_error:
-                    log_event("quiz.generate.retry_skipped", level="WARNING", trace_id=quiz_trace_id, error=str(retry_error))
+Passages:
+{source_section}
+
+Requirements:
+- Each question must come from the passages
+- Include question, 4 options (A/B/C/D), correct answer, brief explanation
+- Age {request.age}: Use appropriate vocabulary
+- Do NOT repeat these existing questions: {existing_q_text or "none"}
+
+Format each question as:
+Q#: [Question]
+A) [Option]
+B) [Option]
+C) [Option]
+D) [Option]
+Correct: [A/B/C/D]
+Explanation: [One sentence]
+"""
+                    
+                    try:
+                        retry_raw = await asyncio.wait_for(
+                            asyncio.to_thread(runtime_llm.invoke, retry_prompt),
+                            timeout=max(20, QUIZ_GENERATION_TIMEOUT_SECONDS // 2),
+                        )
+                        retry_text = _normalize_ocr_quiz_text((retry_raw or "").strip())
+                        retry_questions = _parse_quiz_response(retry_text, missing)
+                        retry_questions = [_sanitize_quiz_question(q) for q in retry_questions]
+                        retry_grounded = [q for q in retry_questions if _is_doc_grounded_question(q, source_blocks)]
+
+                        seen = {_normalize_for_match(q.get("question", "")) for q in questions}
+                        for q in retry_grounded:
+                            key = _normalize_for_match(q.get("question", ""))
+                            if key and key not in seen:
+                                questions.append(q)
+                                seen.add(key)
+                                if len(questions) >= request.num_questions:
+                                    break
+                        
+                        if len(questions) >= request.num_questions:
+                            break
+                    except Exception as retry_error:
+                        log_event(f"quiz.generate.retry_{retry_attempt + 1}_failed", level="WARNING", trace_id=quiz_trace_id, error=str(retry_error))
 
             while len(questions) < request.num_questions:
                 questions.append(_build_source_fallback_question(request.topic, source_blocks, len(questions)))
@@ -978,6 +1022,7 @@ async def upload_document(
     llm_name: Optional[str] = Form(None),
     llm_api_key: Optional[str] = Form(None),
     llm_base_url: Optional[str] = Form(None),
+    character: Optional[str] = Form(None),
     client_trace_id: Optional[str] = Form(None),
 ):
     """
@@ -993,6 +1038,7 @@ async def upload_document(
         profession=profession or "<none>",
         expertise_level=expertise_level or "<none>",
         area_of_interest=area_of_interest or "<none>",
+        character=character or "<none>",
         size_bytes=getattr(file, "size", None),
         client_trace_id=client_trace_id or "<none>",
         **_llm_cfg_fields(_model_config_from_form(llm_provider, llm_name, llm_api_key, llm_base_url)),
@@ -1036,6 +1082,7 @@ async def upload_document(
                 profession=profession or "",
                 expertise_level=expertise_level or "",
                 area_of_interest=area_of_interest or "",
+                character=character or "Friendly Teacher",
             )
             audio_url = None
             try:
@@ -1067,6 +1114,7 @@ async def upload_document(
             profession=profession or "",
             expertise_level=expertise_level or "",
             area_of_interest=area_of_interest or "",
+            character=character or "Friendly Teacher",
         )
         audio_url = None
         try:
@@ -1123,6 +1171,7 @@ async def summarize_document(request: DocumentSummaryRequest):
         profession=request.profession or "<none>",
         expertise_level=request.expertise_level or "<none>",
         area_of_interest=request.area_of_interest or "<none>",
+        character=request.character or "<none>",
         client_trace_id=request.client_trace_id or "<none>",
         **_llm_cfg_fields(request.llm_config),
     )
@@ -1141,6 +1190,7 @@ async def summarize_document(request: DocumentSummaryRequest):
             profession=request.profession or "",
             expertise_level=request.expertise_level or "",
             area_of_interest=request.area_of_interest or "",
+            character=request.character or "Friendly Teacher",
         )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         log_event("documents.summarize.end", trace_id=trace_id, mode=summary_mode, elapsed_ms=elapsed_ms)
@@ -1177,6 +1227,7 @@ async def ask_document(request: DocumentAskRequest):
         profession=request.profession or "<none>",
         expertise_level=request.expertise_level or "<none>",
         area_of_interest=request.area_of_interest or "<none>",
+        character=request.character or "<none>",
         include_examples=request.include_examples,
         include_questions=request.include_questions,
         client_trace_id=request.client_trace_id or "<none>",
@@ -1203,6 +1254,7 @@ async def ask_document(request: DocumentAskRequest):
                 "profession": request.profession,
                 "expertise_level": request.expertise_level,
                 "area_of_interest": request.area_of_interest,
+                "character": request.character or "Friendly Teacher",
             },
             "intent": "document_question",
             "doc_id": request.doc_id,
@@ -1306,6 +1358,7 @@ async def explain_stream(request: ExplainRequest):
         profession=request.profession or "<none>",
         expertise_level=request.expertise_level or "<none>",
         area_of_interest=request.area_of_interest or "<none>",
+        character=request.character or "<none>",
         include_examples=request.include_examples,
         include_questions=request.include_questions,
         force_new_topic=request.force_new_topic,
@@ -1379,6 +1432,7 @@ async def explain_stream(request: ExplainRequest):
                 "profession": request.profession,
                 "expertise_level": request.expertise_level,
                 "area_of_interest": request.area_of_interest,
+                "character": request.character or "Friendly Teacher",
             },
             "intent": "new_question",
             "doc_id": request.doc_id,

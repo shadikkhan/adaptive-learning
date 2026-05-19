@@ -35,14 +35,41 @@ def _remove_unsupported_references(text: str, context: str) -> str:
 
 
 
+def _character_instructions(character: str) -> str:
+    """Generate tone instructions based on selected character."""
+    character_map = {
+        "Friendly Teacher": "Use warm, supportive language with clear analogies.",
+        "Stern Professor": "Use formal, precise academic language.",
+        "Curious Scientist": "Frame the example as an investigative discovery.",
+        "Pirate": "Use adventurous, maritime-themed language and metaphors.",
+        "Doctor": "Use clinical, health-focused framing.",
+        "Comedian": "Use wit, humor, and funny phrasing.",
+        "Storyteller": "Frame as a narrative with vivid imagery.",
+    }
+    return character_map.get(character, character_map["Friendly Teacher"])
+
+
 def example_agent(state: ExplainState):
     age = state["learner"]["age"]
     learner = state.get("learner", {})
     profession = (learner.get("profession") or "").strip()
     expertise_level = (learner.get("expertise_level") or "").strip()
     area_of_interest = (learner.get("area_of_interest") or "").strip()
+    character = (learner.get("character") or "Friendly Teacher").strip()
+    character_instruction = _character_instructions(character)
     user_input = (state.get("user_input") or "").strip()
     explanation = (state.get("simplified_explanation") or "").strip()
+    # For followup_example intent, simplify was skipped — pull last explanation from history
+    if not explanation:
+        for msg in reversed(state.get("messages", [])):
+            if msg.get("role") == "assistant":
+                content = msg.get("content") or ""
+                for line in content.splitlines():
+                    if line.strip().startswith("Explanation: "):
+                        explanation = line.strip()[len("Explanation: "):].strip()
+                        break
+            if explanation:
+                break
     retrieved_context = (state.get("retrieved_context") or "").strip()
     doc_style = _infer_doc_style(retrieved_context)
 
@@ -56,6 +83,8 @@ Document context (use for grounding):
     if doc_style == "research":
         prompt = f"""
 Create ONE evidence-based example for a learner aged {age}.
+
+Character style: {character} - {character_instruction}
 
 Base explanation:
 {explanation}

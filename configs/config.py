@@ -56,10 +56,42 @@ DIFFICULTY_MAP = {
         "hard": "challenging questions requiring deep understanding"
     }
 
-# API CORS settings, needed for frontend-backend communication in case of local development
-CORS_ORIGINS = ["*"]
-CORS_CREDENTIALS = True
-CORS_METHODS = ["*"]
-CORS_HEADERS = ["*"]
-CORS_EXPOSE_HEADERS = ["*"]
+# All settings loaded from config.json — no .env file needed
+import json as _json
+import os as _os
+import pathlib as _pathlib
+
+_here = _pathlib.Path(__file__).resolve()
+_config_candidates = [
+    _here.parent.parent / "config.json",         # adaptive-learning/config.json
+    _here.parent.parent.parent / "config.json",  # fallback for alternate layouts
+]
+_config_path = next((p for p in _config_candidates if p.exists()), _config_candidates[0])
+_root_config = _json.loads(_config_path.read_text())["backend"]
+
+# Inject into os.environ so existing os.getenv() calls work unchanged
+_os.environ.setdefault("SAFETY_STRICT_MODE",         str(_root_config["safety_strict_mode"]).lower())
+_os.environ.setdefault("LOG_LEVEL",                   _root_config["log_level"])
+_os.environ.setdefault("HTTP_LOG_SKIP_PATH_PREFIXES", _root_config["http_log_skip_path_prefixes"])
+_os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", str(_root_config["hf_hub_disable_progress_bars"]))
+_os.environ.setdefault("TRANSFORMERS_VERBOSITY",      _root_config["transformers_verbosity"])
+
+# CORS
+CORS_ORIGINS       = _root_config["cors_origins"]
+CORS_CREDENTIALS   = _root_config["cors_credentials"]
+CORS_METHODS       = _root_config["cors_methods"]
+CORS_HEADERS       = _root_config["cors_headers"]
+CORS_EXPOSE_HEADERS = _root_config["cors_expose_headers"]
+
+# Network/runtime endpoints
+HOST = _root_config["host"]
+PORT = int(_root_config["port"])
+LOCAL_MODEL_BASE_URL = _root_config["local_model_base_url"]
+
+# Provider endpoint defaults
+PROVIDER_BASE_URLS = _root_config["provider_base_urls"]
+OPENAI_BASE_URL = PROVIDER_BASE_URLS["openai"]
+GEMINI_BASE_URL = PROVIDER_BASE_URLS["gemini"]
+CLAUDE_BASE_URL = PROVIDER_BASE_URLS["claude"]
+COPILOT_BASE_URL = PROVIDER_BASE_URLS["copilot"]
 
